@@ -16,6 +16,10 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
 
+    # Include API router
+    from snack_gpt.api.routes import router
+    app.include_router(router)
+
     @app.get("/health")
     async def health_check() -> dict[str, str]:
         """Health check endpoint."""
