@@ -1,0 +1,80 @@
+{
+  "fixture_audio": "/opt/snack-gpt/probe/report.wav",
+  "artifacts_directory": "/var/tmp/snack-gpt-voice-probe",
+  "require_raspberry_pi_3b_plus": true,
+  "network_isolation_command": [
+    "/usr/bin/bwrap",
+    "--unshare-net",
+    "--bind",
+    "/",
+    "/",
+    "--"
+  ],
+  "evidence_files": [
+    "/opt/snack-gpt/bin/openwakeword-probe",
+    "/opt/snack-gpt/models/hey_jarvis_v0.1.onnx",
+    "/opt/snack-gpt/bin/whisper-probe",
+    "/opt/snack-gpt/bin/whisper-cli",
+    "/opt/snack-gpt/models/ggml-tiny.en.bin",
+    "/opt/snack-gpt/bin/needle-probe",
+    "/opt/snack-gpt/models/needle.gguf",
+    "/opt/snack-gpt/bin/piper-probe",
+    "/opt/snack-gpt/bin/piper",
+    "/opt/snack-gpt/models/en_US-lessac-medium.onnx",
+    "/opt/snack-gpt/probe/report.wav"
+  ],
+  "expected_transcript_terms": [
+    "two",
+    "eggs"
+  ],
+  "expected_extraction": {
+    "foods": [
+      {
+        "food": "egg",
+        "quantity": 2
+      }
+    ]
+  },
+  "commands": {
+    "wake_detection": [
+      "/opt/snack-gpt/bin/openwakeword-probe",
+      "--model",
+      "/opt/snack-gpt/models/hey_jarvis_v0.1.onnx",
+      "--audio",
+      "{audio}",
+      "--output",
+      "{wake_result}"
+    ],
+    "transcription": [
+      "/opt/snack-gpt/bin/whisper-probe",
+      "--binary",
+      "/opt/snack-gpt/bin/whisper-cli",
+      "--model",
+      "/opt/snack-gpt/models/ggml-tiny.en.bin",
+      "--audio",
+      "{audio}",
+      "--output",
+      "{transcript}"
+    ],
+    "extraction": [
+      "/opt/snack-gpt/bin/needle-probe",
+      "--model",
+      "/opt/snack-gpt/models/needle.gguf",
+      "--transcript",
+      "{transcript}",
+      "--output",
+      "{extraction}"
+    ],
+    "speech_synthesis": [
+      "/opt/snack-gpt/bin/piper-probe",
+      "--binary",
+      "/opt/snack-gpt/bin/piper",
+      "--model",
+      "/opt/snack-gpt/models/en_US-lessac-medium.onnx",
+      "--extraction",
+      "{extraction}",
+      "--output",
+      "{speech}"
+    ]
+  }
+}

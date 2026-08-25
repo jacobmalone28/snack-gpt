@@ -31,3 +31,9 @@ Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available
 | `SNACK_GPT_PORT` | `8000` | Web server port |
 
 Invalid values fail before the database or server is opened. Keep the default host unless LAN access has been configured and secured.
+
+## Raspberry Pi voice acceptance
+
+The reproducible on-device procedure and manifest are in
+[`docs/voice-probe.md`](docs/voice-probe.md). The probe runs all local inference
+stages without network access and records their timings and peak memory.
