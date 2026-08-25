@@ -120,6 +120,14 @@ class VoiceAdapterTests(unittest.TestCase):
         self.assertIn('"scipy==1.15.3"', script)
         self.assertIn("sysconfig.get_path(\"purelib\")", script)
 
+    def test_provisioning_script_selects_a_capture_device(self) -> None:
+        script = Path("scripts/provision-voice-probe.sh").read_text(encoding="utf-8")
+
+        self.assertIn("--capture-device", script)
+        self.assertIn("arecord --list-devices", script)
+        self.assertIn('DEVICE="$CAPTURE_DEVICE"', script)
+        self.assertIn('arecord --device="$DEVICE"', script)
+
     def _run_adapter(self, environment: dict[str, str], *arguments: object) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "snack_gpt.voice_adapters", *(str(argument) for argument in arguments)],

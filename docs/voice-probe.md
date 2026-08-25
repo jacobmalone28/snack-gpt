@@ -19,12 +19,34 @@ Python runtimes, builds pinned whisper.cpp source, downloads all models, install
 the adapters, and records a 16 kHz mono WAV fixture. At the recording prompt,
 say "Hey Jarvis, I ate two eggs."
 
+When one hardware capture device is present, the script selects it instead of
+using ALSA's potentially playback-only `default` mapping. To choose from
+multiple devices, list them with `arecord --list-devices` and pass the card and
+device numbers explicitly:
+
+```console
+sudo scripts/provision-voice-probe.sh --accept-model-licenses \
+  --capture-device plughw:1,0
+```
+
 To use an existing 16-bit, 16 kHz mono PCM WAV instead:
 
 ```console
 sudo scripts/provision-voice-probe.sh --accept-model-licenses \
   --fixture /path/to/report.wav
 ```
+
+If provisioning already completed the installs but failed while opening the
+default microphone, record the fixture directly instead of rebuilding:
+
+```console
+arecord --list-devices
+sudo arecord --device=plughw:1,0 --duration=7 --format=S16_LE \
+  --rate=16000 --channels=1 --file-type=wav /opt/snack-gpt/probe/report.wav
+sudo chmod a+r /opt/snack-gpt/probe/report.wav
+```
+
+Replace `1,0` with the listed capture card and device numbers.
 
 Provisioning requires a network connection. The acceptance probe itself runs
 every inference stage without one. Review

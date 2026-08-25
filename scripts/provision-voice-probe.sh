@@ -9,15 +9,19 @@ WHISPER_TAG=v1.8.0
 WHISPER_COMMIT=41fc9dea6a4fe056424be86f61164413903fcff4
 WHISPER_MODEL_SHA1=c78c86eb1a8faa21b369bcd33207cc90d64ae9df
 FIXTURE_SOURCE=
+CAPTURE_DEVICE=
 ACCEPT_LICENSES=false
 
 usage() {
     cat <<'EOF'
-Usage: sudo scripts/provision-voice-probe.sh --accept-model-licenses [--fixture FILE]
+Usage: sudo scripts/provision-voice-probe.sh --accept-model-licenses [--fixture FILE] [--capture-device DEVICE]
 
 Installs the local voice acceptance stack under /opt/snack-gpt. Without
 --fixture, the script records a seven-second 16 kHz mono WAV from the default
-ALSA microphone. Existing unrelated files outside /opt/snack-gpt are untouched.
+ALSA capture device. When exactly one hardware capture device exists, the
+script selects it automatically.
+
+--capture-device uses an explicit ALSA device such as plughw:1,0.
 
 --accept-model-licenses acknowledges OpenWakeWord's CC BY-NC-SA 4.0 model
 license and the Piper voice MODEL_CARD fetched during provisioning.
@@ -33,6 +37,11 @@ while (($#)); do
         --fixture)
             [[ $# -ge 2 ]] || { echo "--fixture requires a file" >&2; exit 2; }
             FIXTURE_SOURCE=$2
+            shift 2
+            ;;
+        --capture-device)
+            [[ $# -ge 2 ]] || { echo "--capture-device requires a device" >&2; exit 2; }
+            CAPTURE_DEVICE=$2
             shift 2
             ;;
         -h|--help)
@@ -72,6 +81,20 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     alsa-utils bubblewrap build-essential ca-certificates cmake curl git \
     libopenblas-dev python3 python3-pip python3-venv
+if [[ -z $FIXTURE_SOURCE && -z $CAPTURE_DEVICE ]]; then
+    mapfile -t CAPTURE_DEVICES < <(
+        LC_ALL=C arecord --list-devices 2>/dev/null |
+            sed -nE 's/^card ([0-9]+):.*device ([0-9]+):.*/plughw:\1,\2/p'
+    )
+    if (( ${#CAPTURE_DEVICES[@]} == 1 )); then
+        CAPTURE_DEVICE=${CAPTURE_DEVICES[0]}
+    else
+        echo "Expected one ALSA hardware capture device; found ${#CAPTURE_DEVICES[@]}." >&2
+        arecord --list-devices >&2 || true
+        echo "Rerun with --capture-device DEVICE (for example, plughw:1,0)." >&2
+        exit 1
+    fi
+fi
 python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' || {
     echo "Python 3.11 or newer is required." >&2
     exit 1
@@ -173,10 +196,11 @@ if [[ -n $FIXTURE_SOURCE ]]; then
     install -m 0644 "$FIXTURE_SOURCE" "$PROBE/report.wav"
 else
     echo
-    echo "Recording the acceptance fixture from the default ALSA microphone."
+    DEVICE="$CAPTURE_DEVICE"
+    echo "Recording the acceptance fixture from ALSA device $DEVICE."
     echo "After pressing Enter, say: Hey Jarvis, I ate two eggs."
     read -r
-    arecord --duration=7 --format=S16_LE --rate=16000 --channels=1 \
+    arecord --device="$DEVICE" --duration=7 --format=S16_LE --rate=16000 --channels=1 \
         --file-type=wav "$PROBE/report.wav"
 fi
 
