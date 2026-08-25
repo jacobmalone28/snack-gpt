@@ -109,6 +109,17 @@ class VoiceAdapterTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_provisioning_script_supports_python_3_13_arm64_wheels(self) -> None:
+        script = Path("scripts/provision-voice-probe.sh").read_text(encoding="utf-8")
+
+        self.assertNotIn("Python 3.11 is required", script)
+        self.assertNotIn("python3.11/site-packages", script)
+        self.assertIn('"numpy==2.2.6"', script)
+        self.assertIn('"onnxruntime==1.22.1"', script)
+        self.assertIn('"scikit-learn==1.6.1"', script)
+        self.assertIn('"scipy==1.15.3"', script)
+        self.assertIn("sysconfig.get_path(\"purelib\")", script)
+
     def _run_adapter(self, environment: dict[str, str], *arguments: object) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "snack_gpt.voice_adapters", *(str(argument) for argument in arguments)],

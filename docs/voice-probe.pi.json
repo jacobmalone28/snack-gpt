@@ -25,7 +25,7 @@
     "/opt/snack-gpt/models/en_US-lessac-medium.onnx",
     "/opt/snack-gpt/models/en_US-lessac-medium.onnx.json",
     "/opt/snack-gpt/models/en_US-lessac-medium.MODEL_CARD",
-    "/opt/snack-gpt/venv/lib/python3.11/site-packages/snack_gpt/voice_adapters.py",
+    "/opt/snack-gpt/venv/pyvenv.cfg",
     "/opt/snack-gpt/probe/python-packages.txt",
     "/opt/snack-gpt/probe/report.wav"
   ],

@@ -17,6 +17,13 @@ installs its ONNX dependency set explicitly. OpenWakeWord code is Apache-2.0;
 its included pretrained models, including Hey Jarvis, are CC BY-NC-SA 4.0 and
 therefore non-commercial.
 
+The explicit inference set uses `numpy==2.2.6`, `scipy==1.15.3`,
+`scikit-learn==1.6.1`, and `onnxruntime==1.22.1`. Each release publishes a
+CPython 3.13 AArch64 Linux wheel, so Raspberry Pi OS Trixie does not need to
+compile these packages or install a second Python interpreter. The provisioner
+also derives the virtual environment's package directory with `sysconfig`
+rather than assuming a Python minor version.
+
 ## whisper.cpp
 
 [`whisper.cpp v1.8.0`](https://github.com/ggml-org/whisper.cpp/tree/v1.8.0) is

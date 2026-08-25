@@ -72,8 +72,8 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     alsa-utils bubblewrap build-essential ca-certificates cmake curl git \
     libopenblas-dev python3 python3-pip python3-venv
-[[ $(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")') == 3.11 ]] || {
-    echo "Python 3.11 is required by the verified ARM64 dependency set." >&2
+python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' || {
+    echo "Python 3.11 or newer is required." >&2
     exit 1
 }
 
@@ -87,11 +87,11 @@ PIP=("$PYTHON" -m pip)
 echo "Installing pinned Python runtimes..."
 "${PIP[@]}" install --upgrade pip
 "${PIP[@]}" install \
-    "numpy==1.26.4" \
-    "onnxruntime==1.16.3" \
+    "numpy==2.2.6" \
+    "onnxruntime==1.22.1" \
     "requests==2.32.5" \
-    "scikit-learn==1.3.2" \
-    "scipy==1.11.4" \
+    "scikit-learn==1.6.1" \
+    "scipy==1.15.3" \
     "tqdm==4.67.1" \
     "huggingface-hub==0.31.4" \
     "piper-tts==$PIPER_VERSION"
@@ -163,7 +163,8 @@ exec "$PYTHON" -m piper "\$@"
 EOF
 chmod 0755 "$BIN/piper"
 "${PIP[@]}" freeze --all | LC_ALL=C sort >"$PROBE/python-packages.txt"
-[[ -s $VENV/lib/python3.11/site-packages/snack_gpt/voice_adapters.py ]] || {
+PURELIB=$($PYTHON -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
+[[ -s $PURELIB/snack_gpt/voice_adapters.py ]] || {
     echo "Installed voice adapter module was not found." >&2
     exit 1
 }
