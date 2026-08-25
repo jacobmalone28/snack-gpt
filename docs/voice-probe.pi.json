@@ -21,10 +21,11 @@
     "/opt/snack-gpt/bin/needle-probe",
     "/opt/snack-gpt/lib/libneedle.so",
     "/opt/snack-gpt/bin/piper-probe",
+    "/opt/snack-gpt/bin/piper-worker",
     "/opt/snack-gpt/bin/piper",
-    "/opt/snack-gpt/models/en_US-lessac-medium.onnx",
-    "/opt/snack-gpt/models/en_US-lessac-medium.onnx.json",
-    "/opt/snack-gpt/models/en_US-lessac-medium.MODEL_CARD",
+    "/opt/snack-gpt/models/en_US-lessac-low.onnx",
+    "/opt/snack-gpt/models/en_US-lessac-low.onnx.json",
+    "/opt/snack-gpt/models/en_US-lessac-low.MODEL_CARD",
     "/opt/snack-gpt/venv/pyvenv.cfg",
     "/opt/snack-gpt/probe/python-packages.txt",
     "/opt/snack-gpt/probe/report.wav"
@@ -41,6 +42,19 @@
       }
     ]
   },
+  "workers": [
+    {
+      "name": "piper",
+      "command": [
+        "/opt/snack-gpt/bin/piper-worker",
+        "--model",
+        "/opt/snack-gpt/models/en_US-lessac-low.onnx",
+        "--socket",
+        "{artifacts}/piper.sock"
+      ],
+      "ready_path": "{artifacts}/piper.sock"
+    }
+  ],
   "commands": {
     "wake_detection": [
       "/opt/snack-gpt/bin/openwakeword-probe",
@@ -73,10 +87,8 @@
     ],
     "speech_synthesis": [
       "/opt/snack-gpt/bin/piper-probe",
-      "--binary",
-      "/opt/snack-gpt/bin/piper",
-      "--model",
-      "/opt/snack-gpt/models/en_US-lessac-medium.onnx",
+      "--socket",
+      "{artifacts}/piper.sock",
       "--extraction",
       "{extraction}",
       "--output",

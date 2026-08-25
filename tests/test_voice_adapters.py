@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 
 
@@ -99,6 +100,69 @@ class VoiceAdapterTests(unittest.TestCase):
             )
             self.assertEqual(speech.read_bytes(), b"RIFFspeech")
 
+    def test_piper_worker_reuses_loaded_voice(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            modules = root / "modules"
+            (modules / "piper").mkdir(parents=True)
+            (modules / "piper" / "__init__.py").write_text(
+                textwrap.dedent(
+                    """
+                    class PiperVoice:
+                        @classmethod
+                        def load(cls, model):
+                            return cls()
+
+                        def synthesize_wav(self, text, output):
+                            output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+                            output.writeframes(text.encode())
+                    """
+                ),
+                encoding="utf-8",
+            )
+            environment = os.environ | {"PYTHONPATH": f"{modules}{os.pathsep}{os.getcwd()}"}
+            socket_path = root / "piper.sock"
+            model = root / "voice.onnx"
+            model.write_bytes(b"model")
+            worker = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "snack_gpt.voice_adapters",
+                    "piper-worker",
+                    "--model",
+                    str(model),
+                    "--socket",
+                    str(socket_path),
+                ],
+                env=environment,
+            )
+            try:
+                for _ in range(100):
+                    if socket_path.exists():
+                        break
+                    time.sleep(0.01)
+                self.assertTrue(socket_path.exists())
+                extraction = root / "extraction.json"
+                extraction.write_text('{"foods":[{"food":"egg","quantity":2}]}', encoding="utf-8")
+                speech = root / "speech.wav"
+
+                self._run_adapter(
+                    environment,
+                    "synthesize",
+                    "--socket",
+                    socket_path,
+                    "--extraction",
+                    extraction,
+                    "--output",
+                    speech,
+                )
+
+                self.assertGreater(speech.stat().st_size, 4)
+            finally:
+                worker.terminate()
+                worker.wait(timeout=5)
+
     def test_provisioning_script_has_valid_bash_syntax(self) -> None:
         result = subprocess.run(
             ["bash", "-n", "scripts/provision-voice-probe.sh"],
@@ -127,6 +191,8 @@ class VoiceAdapterTests(unittest.TestCase):
         self.assertIn("arecord --list-devices", script)
         self.assertIn('DEVICE="$CAPTURE_DEVICE"', script)
         self.assertIn('arecord --device="$DEVICE"', script)
+        self.assertIn("en_US-lessac-low.onnx", script)
+        self.assertIn('write_adapter "$BIN/piper-worker" piper-worker', script)
 
     def _run_adapter(self, environment: dict[str, str], *arguments: object) -> None:
         result = subprocess.run(

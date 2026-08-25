@@ -6,9 +6,11 @@ import importlib
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 from typing import Protocol, cast
+import wave
 
 
 class AdapterError(Exception):
@@ -189,6 +191,52 @@ def _synthesize(
         raise AdapterError("Piper did not create a non-empty WAV file")
 
 
+def _piper_worker(model_path: Path, socket_path: Path) -> None:
+    piper_module = importlib.import_module("piper")
+    voice_type = getattr(piper_module, "PiperVoice")
+    voice = voice_type.load(str(model_path))
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    socket_path.unlink(missing_ok=True)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(socket_path))
+        server.listen()
+        while True:
+            connection, _ = server.accept()
+            with connection:
+                try:
+                    request = json.loads(connection.recv(65536).decode("utf-8"))
+                    if not isinstance(request, dict):
+                        raise ValueError("request must be an object")
+                    text = request.get("text")
+                    output_value = request.get("output")
+                    if not isinstance(text, str) or not isinstance(output_value, str):
+                        raise ValueError("request must contain text and output strings")
+                    output_path = Path(output_value)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with wave.open(str(output_path), "wb") as output:
+                        voice.synthesize_wav(text, output)
+                    response = {"ok": True}
+                except (OSError, ValueError, json.JSONDecodeError) as error:
+                    response = {"ok": False, "error": str(error)}
+                connection.sendall(json.dumps(response).encode("utf-8"))
+
+
+def _synthesize_warm(socket_path: Path, extraction_path: Path, output_path: Path) -> None:
+    request = json.dumps({"text": _speech_text(extraction_path), "output": str(output_path)})
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(socket_path))
+        client.sendall(request.encode("utf-8"))
+        client.shutdown(socket.SHUT_WR)
+        response_value: object = json.loads(client.recv(65536).decode("utf-8"))
+    if not isinstance(response_value, dict):
+        raise AdapterError("Piper worker returned an invalid response")
+    response = cast(dict[object, object], response_value)
+    if response.get("ok") is not True:
+        raise AdapterError(f"Piper worker failed: {response.get('error', 'unknown error')}")
+    if not output_path.is_file() or output_path.stat().st_size <= 4:
+        raise AdapterError("Piper did not create a non-empty WAV file")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Normalize local voice runtime interfaces for the acceptance probe")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -212,11 +260,17 @@ def _parser() -> argparse.ArgumentParser:
     extract.add_argument("--output", type=Path, required=True)
 
     synthesize = commands.add_parser("synthesize")
-    synthesize.add_argument("--binary", type=Path, required=True)
+    synthesize_runtime = synthesize.add_mutually_exclusive_group(required=True)
+    synthesize_runtime.add_argument("--binary", type=Path)
+    synthesize_runtime.add_argument("--socket", type=Path)
     synthesize.add_argument("--binary-argument", action="append", default=[])
-    synthesize.add_argument("--model", type=Path, required=True)
+    synthesize.add_argument("--model", type=Path)
     synthesize.add_argument("--extraction", type=Path, required=True)
     synthesize.add_argument("--output", type=Path, required=True)
+
+    piper_worker = commands.add_parser("piper-worker")
+    piper_worker.add_argument("--model", type=Path, required=True)
+    piper_worker.add_argument("--socket", type=Path, required=True)
     return parser
 
 
@@ -230,7 +284,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
         elif parsed.command == "extract":
             _extract(parsed.model, parsed.library, parsed.transcript, parsed.output)
         elif parsed.command == "synthesize":
-            _synthesize(parsed.binary, parsed.binary_argument, parsed.model, parsed.extraction, parsed.output)
+            if parsed.socket:
+                _synthesize_warm(parsed.socket, parsed.extraction, parsed.output)
+            else:
+                if parsed.model is None:
+                    raise AdapterError("--model is required with --binary")
+                _synthesize(parsed.binary, parsed.binary_argument, parsed.model, parsed.extraction, parsed.output)
+        elif parsed.command == "piper-worker":
+            _piper_worker(parsed.model, parsed.socket)
     except (AdapterError, ImportError, OSError, ValueError, json.JSONDecodeError) as error:
         print(f"Voice adapter failed: {error}", file=sys.stderr)
         return 1

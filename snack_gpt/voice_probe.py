@@ -66,7 +66,12 @@ def _descendant_processes(process_id: int) -> set[int]:
     return descendants
 
 
-def _run_stage(name: str, command: Sequence[str], deadline: float) -> StageResult:
+def _run_stage(
+    name: str,
+    command: Sequence[str],
+    deadline: float,
+    worker_process_ids: Sequence[int] = (),
+) -> StageResult:
     started = time.monotonic()
     process = subprocess.Popen(
         command,
@@ -77,9 +82,12 @@ def _run_stage(name: str, command: Sequence[str], deadline: float) -> StageResul
     )
     peak_memory = 0
     while process.poll() is None:
+        measured_processes = _descendant_processes(process.pid)
+        for worker_process_id in worker_process_ids:
+            measured_processes.update(_descendant_processes(worker_process_id))
         peak_memory = max(
             peak_memory,
-            sum(_read_rss_bytes(process_id) for process_id in _descendant_processes(process.pid)),
+            sum(_read_rss_bytes(process_id) for process_id in measured_processes),
         )
         if time.monotonic() >= deadline:
             os.killpg(process.pid, signal.SIGKILL)
@@ -104,6 +112,61 @@ def _run_stage(name: str, command: Sequence[str], deadline: float) -> StageResul
     if process.returncode != 0:
         raise StageExecutionError(f"{name} exited with status {process.returncode}", result)
     return result
+
+
+def _stop_workers(workers: Sequence[subprocess.Popen[bytes]]) -> None:
+    for worker in workers:
+        if worker.poll() is None:
+            os.killpg(worker.pid, signal.SIGTERM)
+    for worker in workers:
+        if worker.poll() is None:
+            worker.wait()
+
+
+def _start_workers(
+    manifest: Mapping[str, object],
+    isolation_command: Sequence[str],
+    replacements: Mapping[str, str],
+) -> list[subprocess.Popen[bytes]]:
+    workers_value = manifest.get("workers", [])
+    if not isinstance(workers_value, list):
+        raise ProbeError("workers must be a list")
+    workers: list[subprocess.Popen[bytes]] = []
+    try:
+        for worker_value in cast(list[object], workers_value):
+            if not isinstance(worker_value, dict):
+                raise ProbeError("each worker must be an object")
+            worker = cast(dict[str, object], worker_value)
+            name = worker.get("name")
+            command_value = worker.get("command")
+            ready_value = worker.get("ready_path")
+            if not isinstance(name, str) or not isinstance(command_value, list) or not isinstance(ready_value, str):
+                raise ProbeError("each worker must contain name, command, and ready_path")
+            command_parts = cast(list[object], command_value)
+            if not command_parts or not all(isinstance(part, str) for part in command_parts):
+                raise ProbeError(f"worker {name} command must be a non-empty list of strings")
+            command = [part.format_map(replacements) for part in cast(list[str], command_parts)]
+            ready_path = Path(ready_value.format_map(replacements))
+            ready_path.unlink(missing_ok=True)
+            process = subprocess.Popen(
+                [*isolation_command, *command],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            workers.append(process)
+            deadline = time.monotonic() + HARD_TIMEOUT_SECONDS
+            while not ready_path.exists():
+                if process.poll() is not None:
+                    raise ProbeError(f"worker {name} exited with status {process.returncode} during startup")
+                if time.monotonic() >= deadline:
+                    raise ProbeError(f"worker {name} did not become ready within {HARD_TIMEOUT_SECONDS:g} seconds")
+                time.sleep(0.01)
+    except Exception:
+        _stop_workers(workers)
+        raise
+    return workers
 
 
 def _is_subset(expected: object, actual: object) -> bool:
@@ -216,6 +279,7 @@ def run(manifest_path: Path, output_path: Path) -> int:
     artifacts.mkdir(parents=True, exist_ok=True)
     paths = {
         "audio": fixture,
+        "artifacts": artifacts,
         "wake_result": artifacts / "wake.json",
         "transcript": artifacts / "transcript.txt",
         "extraction": artifacts / "extraction.json",
@@ -227,34 +291,45 @@ def run(manifest_path: Path, output_path: Path) -> int:
     commands = cast(dict[str, object], commands_value)
     stages: list[StageResult] = []
     processing_deadline = 0.0
-    for name in STAGE_NAMES:
-        command_template = commands.get(name)
-        if not isinstance(command_template, list):
-            raise ProbeError(f"commands.{name} must be a non-empty list of strings")
-        command_parts = cast(list[object], command_template)
-        if not command_parts or not all(isinstance(part, str) for part in command_parts):
-            raise ProbeError(f"commands.{name} must be a non-empty list of strings")
-        replacements = {key: str(value) for key, value in paths.items()}
-        command = [part.format_map(replacements) for part in cast(list[str], command_parts)]
-        if name == "wake_detection":
-            deadline = time.monotonic() + HARD_TIMEOUT_SECONDS
-        else:
-            if processing_deadline == 0.0:
-                processing_deadline = time.monotonic() + HARD_TIMEOUT_SECONDS
-            deadline = processing_deadline
-        try:
-            stages.append(_run_stage(name, [*isolation_command, *command], deadline))
-        except StageExecutionError as error:
-            stages.append(error.result)
-            verdict = "hard_timeout_exceeded" if error.timed_out else "not_measured"
-            return _write_failure_report(
-                output_path,
-                error,
-                platform_details,
-                stages,
-                offline=True,
-                latency_verdict=verdict,
-            )
+    replacements = {key: str(value) for key, value in paths.items()}
+    workers = _start_workers(manifest, isolation_command, replacements)
+    try:
+        for name in STAGE_NAMES:
+            command_template = commands.get(name)
+            if not isinstance(command_template, list):
+                raise ProbeError(f"commands.{name} must be a non-empty list of strings")
+            command_parts = cast(list[object], command_template)
+            if not command_parts or not all(isinstance(part, str) for part in command_parts):
+                raise ProbeError(f"commands.{name} must be a non-empty list of strings")
+            command = [part.format_map(replacements) for part in cast(list[str], command_parts)]
+            if name == "wake_detection":
+                deadline = time.monotonic() + HARD_TIMEOUT_SECONDS
+            else:
+                if processing_deadline == 0.0:
+                    processing_deadline = time.monotonic() + HARD_TIMEOUT_SECONDS
+                deadline = processing_deadline
+            try:
+                stages.append(
+                    _run_stage(
+                        name,
+                        [*isolation_command, *command],
+                        deadline,
+                        [worker.pid for worker in workers],
+                    )
+                )
+            except StageExecutionError as error:
+                stages.append(error.result)
+                verdict = "hard_timeout_exceeded" if error.timed_out else "not_measured"
+                return _write_failure_report(
+                    output_path,
+                    error,
+                    platform_details,
+                    stages,
+                    offline=True,
+                    latency_verdict=verdict,
+                )
+    finally:
+        _stop_workers(workers)
 
     wake_result = _load_object(paths["wake_result"])
     if wake_result.get("detected") is not True:

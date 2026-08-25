@@ -66,6 +66,9 @@ Each installed runtime adapter uses the command line shown in
 The adapters only normalize native runtime input and output. The manifest lists
 each adapter, native binary, model, and fixture in `evidence_files`; the result
 records a SHA-256 digest for each one so separate runs can be compared exactly.
+Piper is preloaded before timing through a local Unix socket because the
+application keeps feedback available while listening; worker memory remains
+included in each stage's peak measurement.
 
 ## Run
 

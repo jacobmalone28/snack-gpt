@@ -158,12 +158,12 @@ echo "$WHISPER_MODEL_SHA1  $MODELS/ggml-tiny.en.bin" | sha1sum --check --status 
 }
 
 echo "Downloading Piper voice..."
-PIPER_BASE=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium
-curl --fail --location --retry 3 --output "$MODELS/en_US-lessac-medium.onnx" \
-    "$PIPER_BASE/en_US-lessac-medium.onnx"
-curl --fail --location --retry 3 --output "$MODELS/en_US-lessac-medium.onnx.json" \
-    "$PIPER_BASE/en_US-lessac-medium.onnx.json"
-curl --fail --location --retry 3 --output "$MODELS/en_US-lessac-medium.MODEL_CARD" \
+PIPER_BASE=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/low
+curl --fail --location --retry 3 --output "$MODELS/en_US-lessac-low.onnx" \
+    "$PIPER_BASE/en_US-lessac-low.onnx"
+curl --fail --location --retry 3 --output "$MODELS/en_US-lessac-low.onnx.json" \
+    "$PIPER_BASE/en_US-lessac-low.onnx.json"
+curl --fail --location --retry 3 --output "$MODELS/en_US-lessac-low.MODEL_CARD" \
     "$PIPER_BASE/MODEL_CARD"
 
 write_adapter() {
@@ -180,6 +180,7 @@ write_adapter "$BIN/openwakeword-probe" wake
 write_adapter "$BIN/whisper-probe" transcribe
 write_adapter "$BIN/needle-probe" extract
 write_adapter "$BIN/piper-probe" synthesize
+write_adapter "$BIN/piper-worker" piper-worker
 cat >"$BIN/piper" <<EOF
 #!/bin/sh
 exec "$PYTHON" -m piper "\$@"

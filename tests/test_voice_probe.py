@@ -46,11 +46,15 @@ class VoiceProbeTests(unittest.TestCase):
                     import json
                     import os
                     from pathlib import Path
+                    import signal
                     import sys
 
                     mode, *arguments = sys.argv[1:]
                     if mode == "isolate":
                         os.execv(arguments[0], arguments)
+                    if mode == "worker":
+                        Path(arguments[0]).touch()
+                        signal.pause()
                     output = Path(arguments[-1])
                     if mode == "wake":
                         output.write_text(json.dumps({"detected": True}))
@@ -77,6 +81,13 @@ class VoiceProbeTests(unittest.TestCase):
                         "require_raspberry_pi_3b_plus": False,
                         "network_isolation_command": [sys.executable, str(fake_runtime), "isolate"],
                         "evidence_files": [str(fake_runtime), str(fixture)],
+                        "workers": [
+                            {
+                                "name": "feedback",
+                                "command": [sys.executable, str(fake_runtime), "worker", "{artifacts}/feedback.ready"],
+                                "ready_path": "{artifacts}/feedback.ready",
+                            }
+                        ],
                         "expected_transcript_terms": ["two", "eggs"],
                         "expected_extraction": {"foods": [{"food": "egg", "quantity": 2}]},
                         "commands": {
@@ -112,6 +123,7 @@ class VoiceProbeTests(unittest.TestCase):
             self.assertEqual(len(report["evidence_files"]), 2)
             self.assertTrue(all(len(item["sha256"]) == 64 for item in report["evidence_files"]))
             self.assertIn(report["latency_verdict"], {"expected_latency_achievable", "hard_timeout_only", "hard_timeout_exceeded"})
+            self.assertTrue((artifacts / "feedback.ready").exists())
             self.assertEqual(json.loads((artifacts / "extraction.json").read_text())["foods"][0]["food"], "egg")
             self.assertGreater((artifacts / "speech.wav").stat().st_size, 4)
 

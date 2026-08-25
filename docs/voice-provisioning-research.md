@@ -50,7 +50,9 @@ appropriate for a 1 GB Pi.
 [`piper-tts==1.7.0`](https://pypi.org/project/piper-tts/1.7.0/) publishes an
 ARM64 wheel and is GPL-3.0-or-later. The official
 [`Piper CLI documentation`](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/CLI.md)
-defines model download and WAV output. The pinned `en_US-lessac-medium` voice
+defines model download and WAV output, and notes that loading a voice for every
+CLI invocation is slow. The probe therefore preloads Piper through its official
+Python API in an offline Unix-socket worker. The pinned `en_US-lessac-low` voice
 comes from the immutable `v1.0.0` revision of
-[`rhasspy/piper-voices`](https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en/en_US/lessac/medium).
+[`rhasspy/piper-voices`](https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en/en_US/lessac/low).
 Its model, JSON configuration, and MODEL_CARD are all retained locally.
