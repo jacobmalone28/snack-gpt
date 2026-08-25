@@ -23,9 +23,9 @@ pip install -e ".[dev]"
 # Create necessary directories
 mkdir -p data logs
 
-# Initialize database if needed
+# Initialize or upgrade the database
 echo "Initializing database..."
-# This will be expanded later with alembic migrations
+alembic upgrade head
 
 echo "Setup complete!"
 echo "To activate the environment, run: source venv/bin/activate"

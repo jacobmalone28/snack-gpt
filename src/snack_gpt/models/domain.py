@@ -188,12 +188,21 @@ class Command(Base):
     __tablename__ = "commands"
 
     id = Column(Integer, primary_key=True)
+    profile_id = Column(Integer, nullable=True, index=True)  # Phase 3: User profile
     idempotency_key = Column(String(255), nullable=False, unique=True)
+    source = Column(String(20), nullable=True, default="voice")  # Phase 3: voice, manual, api
     transcript = Column(Text, nullable=False)
-    status = Column(String(63), nullable=False, default="pending")  # pending, completed, failed
+    status = Column(String(63), nullable=False, default="pending")  # pending, processing, confirmed, failed, undone
+    parsed_intent = Column(Text, nullable=True)  # Phase 3: JSON of ParsedCommand
+    llm_response = Column(Text, nullable=True)  # Phase 3: JSON of LLMResponse if ambiguous
+    entry_ids = Column(Text, nullable=True)  # Phase 3: JSON list of created entry IDs
+    pending_ids = Column(Text, nullable=True)  # Phase 3: JSON list of pending item IDs
     outcome_summary = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)  # Phase 3: When status changed from processing
+    retry_count = Column(Integer, nullable=False, default=0)  # Phase 3: Retry tracking
+    max_retries = Column(Integer, nullable=False, default=3)  # Phase 3: Max retry attempts
 
 
 class ProviderCache(Base):
