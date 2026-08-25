@@ -116,18 +116,23 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
     needle_module = importlib.import_module("needle")
     extractor = cast(Callable[..., object], getattr(needle_module, "extract"))
     schema = {
-        "name": "food_report",
-        "description": "Foods and quantities explicitly stated in a spoken consumption report",
+        "name": "log_food_intake",
+        "description": "Log foods and quantities that the user says they consumed.",
         "parameters": {
             "type": "object",
             "properties": {
                 "foods": {
                     "type": "array",
+                    "description": "Every food the user consumed.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "food": {"type": "string"},
-                            "quantity": {"type": "number", "exclusiveMinimum": 0},
+                            "food": {"type": "string", "description": "Consumed food."},
+                            "quantity": {
+                                "type": "number",
+                                "description": "Quantity consumed.",
+                                "exclusiveMinimum": 0,
+                            },
                         },
                         "required": ["food", "quantity"],
                     },

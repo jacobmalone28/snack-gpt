@@ -11,13 +11,15 @@ import resource
 import signal
 import subprocess
 import sys
+import tempfile
 import time
-from typing import Any, TypedDict, cast
+from typing import Any, BinaryIO, TypedDict, cast
 
 
 STAGE_NAMES = ("wake_detection", "transcription", "extraction", "speech_synthesis")
 EXPECTED_LATENCY_SECONDS = 15.0
 HARD_TIMEOUT_SECONDS = 30.0
+STAGE_STDERR_LIMIT_BYTES = 4096
 
 
 class StageResult(TypedDict):
@@ -66,6 +68,14 @@ def _descendant_processes(process_id: int) -> set[int]:
     return descendants
 
 
+def _read_stderr_tail(stderr_file: BinaryIO) -> str:
+    stderr_file.seek(0, os.SEEK_END)
+    size = stderr_file.tell()
+    stderr_file.seek(max(0, size - STAGE_STDERR_LIMIT_BYTES))
+    detail = stderr_file.read().decode("utf-8", errors="replace").strip()
+    return f"[truncated] {detail}" if size > STAGE_STDERR_LIMIT_BYTES else detail
+
+
 def _run_stage(
     name: str,
     command: Sequence[str],
@@ -73,13 +83,18 @@ def _run_stage(
     worker_process_ids: Sequence[int] = (),
 ) -> StageResult:
     started = time.monotonic()
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    stderr_file = tempfile.TemporaryFile()
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
+    except Exception:
+        stderr_file.close()
+        raise
     peak_memory = 0
     while process.poll() is None:
         measured_processes = _descendant_processes(process.pid)
@@ -97,6 +112,7 @@ def _run_stage(
                 "duration_seconds": round(time.monotonic() - started, 6),
                 "peak_memory_bytes": peak_memory,
             }
+            stderr_file.close()
             raise StageExecutionError(
                 f"{name} exceeded the {HARD_TIMEOUT_SECONDS:g}-second pipeline timeout",
                 result,
@@ -109,8 +125,13 @@ def _run_stage(
         "duration_seconds": round(time.monotonic() - started, 6),
         "peak_memory_bytes": peak_memory,
     }
+    stderr_detail = _read_stderr_tail(stderr_file)
+    stderr_file.close()
     if process.returncode != 0:
-        raise StageExecutionError(f"{name} exited with status {process.returncode}", result)
+        message = f"{name} exited with status {process.returncode}"
+        if stderr_detail:
+            message = f"{message}: {stderr_detail}"
+        raise StageExecutionError(message, result)
     return result
 
 

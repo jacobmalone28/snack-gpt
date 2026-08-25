@@ -38,7 +38,7 @@
   "expected_extraction": {
     "foods": [
       {
-        "food": "egg",
+        "food": "eggs",
         "quantity": 2
       }
     ]

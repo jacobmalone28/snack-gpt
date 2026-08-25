@@ -5,10 +5,27 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
+
+from snack_gpt import voice_probe
 
 
 class VoiceProbeTests(unittest.TestCase):
+    def test_stage_failure_includes_stderr(self) -> None:
+        with self.assertRaises(voice_probe.StageExecutionError) as raised:
+            getattr(voice_probe, "_run_stage")(
+                "extraction",
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; print('Needle refused the food logging call', file=sys.stderr); raise SystemExit(1)",
+                ],
+                time.monotonic() + 5,
+            )
+
+        self.assertIn("Needle refused the food logging call", str(raised.exception))
+
     def test_probe_records_blocking_incompatibility(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

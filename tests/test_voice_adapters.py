@@ -31,7 +31,8 @@ class VoiceAdapterTests(unittest.TestCase):
             )
             (modules / "needle.py").write_text(
                 "def extract(text, schema, weights=None):\n"
-                "    return {'foods': [{'food': 'egg', 'quantity': 2}]}\n",
+                "    assert schema['name'] == 'log_food_intake'\n"
+                "    return {'foods': [{'food': 'eggs', 'quantity': 2}]}\n",
                 encoding="utf-8",
             )
             fake_binary = root / "fake_binary.py"
@@ -81,7 +82,7 @@ class VoiceAdapterTests(unittest.TestCase):
 
             extraction = root / "extraction.json"
             self._run_adapter(environment, "extract", "--transcript", transcript, "--output", extraction)
-            self.assertEqual(json.loads(extraction.read_text())["foods"][0], {"food": "egg", "quantity": 2})
+            self.assertEqual(json.loads(extraction.read_text())["foods"][0], {"food": "eggs", "quantity": 2})
 
             speech = root / "speech.wav"
             self._run_adapter(
