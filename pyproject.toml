@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "snack-gpt"
+version = "0.1.0"
+description = "A local, voice-enabled food logger"
+requires-python = ">=3.11"
+
+[project.scripts]
+snack-gpt = "snack_gpt.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["snack_gpt"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+include = ["snack_gpt", "tests"]
