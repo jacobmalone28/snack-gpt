@@ -19,12 +19,14 @@ class VoiceAdapterTests(unittest.TestCase):
             (modules / "openwakeword" / "model.py").write_text(
                 textwrap.dedent(
                     """
+                    from fractions import Fraction
+
                     class Model:
                         def __init__(self, **kwargs):
                             pass
 
                         def predict_clip(self, path):
-                            return [{"hey_jarvis_v0.1": 0.2}, {"hey_jarvis_v0.1": 0.8}]
+                            return [{"hey_jarvis_v0.1": Fraction(1, 5)}, {"hey_jarvis_v0.1": Fraction(4, 5)}]
                     """
                 ),
                 encoding="utf-8",

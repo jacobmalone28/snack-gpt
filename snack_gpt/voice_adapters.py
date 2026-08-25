@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Mapping, Sequence
 import importlib
 import json
+from numbers import Real
 import os
 from pathlib import Path
 import socket
@@ -66,7 +67,7 @@ def _wake(model_path: Path, audio_path: Path, output_path: Path) -> None:
         if not isinstance(prediction, Mapping):
             raise AdapterError("OpenWakeWord returned an unexpected frame result")
         for score in cast(Mapping[object, object], prediction).values():
-            if isinstance(score, (int, float)):
+            if isinstance(score, Real):
                 scores.append(float(score))
     if not scores:
         raise AdapterError("OpenWakeWord returned no prediction scores")
