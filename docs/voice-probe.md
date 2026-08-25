@@ -5,15 +5,34 @@ The voice probe exercises provisioned OpenWakeWord, whisper.cpp with Whisper
 network namespace, records stage timing and peak resident memory, and writes a
 JSON acceptance report.
 
-## Provisioned inputs
+## Provision
 
-Use 64-bit Raspberry Pi OS Lite and provision Bubblewrap, the four runtimes,
-their local models, and a 16 kHz mono WAV fixture containing "Hey Jarvis, I ate
-two eggs." The probe does not download or install dependencies.
+On a Raspberry Pi 3B+ running 64-bit Raspberry Pi OS Lite, check out this
+repository and run:
 
-Each runtime adapter is an executable with the command line shown in
-[`voice-probe.pi.json`](voice-probe.pi.json). Adapters must return nonzero on a
-runtime error and write these artifacts:
+```console
+sudo scripts/provision-voice-probe.sh --accept-model-licenses
+```
+
+The script installs system packages, creates `/opt/snack-gpt`, installs pinned
+Python runtimes, builds pinned whisper.cpp source, downloads all models, installs
+the adapters, and records a 16 kHz mono WAV fixture. At the recording prompt,
+say "Hey Jarvis, I ate two eggs."
+
+To use an existing 16-bit, 16 kHz mono PCM WAV instead:
+
+```console
+sudo scripts/provision-voice-probe.sh --accept-model-licenses \
+  --fixture /path/to/report.wav
+```
+
+Provisioning requires a network connection. The acceptance probe itself runs
+every inference stage without one. Review
+[`voice-provisioning-research.md`](voice-provisioning-research.md) before
+accepting the OpenWakeWord and Piper model licenses.
+
+Each installed runtime adapter uses the command line shown in
+[`voice-probe.pi.json`](voice-probe.pi.json) and writes these artifacts:
 
 | Stage | Artifact contract |
 | --- | --- |
@@ -22,9 +41,9 @@ runtime error and write these artifacts:
 | Needle | JSON containing the configured expected extraction |
 | Piper | Non-empty WAV audio |
 
-The adapters only normalize native runtime input and output. List every adapter,
-native binary, model, and fixture in `evidence_files`; the result records a
-SHA-256 digest for each one so separate runs can be compared exactly.
+The adapters only normalize native runtime input and output. The manifest lists
+each adapter, native binary, model, and fixture in `evidence_files`; the result
+records a SHA-256 digest for each one so separate runs can be compared exactly.
 
 ## Run
 
