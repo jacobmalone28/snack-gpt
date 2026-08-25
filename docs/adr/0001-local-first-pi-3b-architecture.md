@@ -1,3 +1,0 @@
-# Use a local-first two-service architecture on Raspberry Pi 3B
-
-Snack GPT will run an audio service and a FastAPI application as native `systemd` services on a Raspberry Pi 3B, with SQLite as the local system of record and hosted services limited to transcription and ambiguous-language interpretation. This favors privacy, offline access, low operating cost, and operation within 1 GB of RAM over container isolation or fully local AI; Docker, Redis, local transcription, and a client-heavy dashboard are deliberately excluded until measurements show the hardware can support them.

@@ -1,45 +1,29 @@
-# Snack GPT
+# Snack-GPT
 
-Snack GPT records food consumption and reports progress toward nutrition targets while keeping food preparation distinct from consumption.
+Snack-GPT is a personal food-logging context for recording one person's food consumption and summarizing it over time. Nutrition coaching and food recommendations are outside this context.
 
 ## Language
 
-**Profile**:
-A household member whose consumption entries and daily targets are tracked independently.
-_Avoid_: User, account
+**Consumption Event**:
+A distinct record that the person consumed a specified quantity of a food on a calendar day. Voice creation assigns the current local day; repeated consumption remains separate, and each event retains the food's nutrition at the time of recording. Its food, quantity, or day may be corrected through the web interface, and it may be removed there.
+_Avoid_: Food, meal, log entry
 
-**Food Reference**:
-A reusable description of a food and its nutrition values, portions, preparation state, and provenance. It is not evidence that the food was consumed.
-_Avoid_: Food item, ingredient record
+**Nutrition Snapshot**:
+The calories, protein, carbohydrates, and fat attributed to a Consumption Event when it is recorded.
+_Avoid_: Food lookup data, live nutrition
 
-**Food Alias**:
-A profile-approved phrase or barcode that identifies one exact food reference. Recent choices may influence matching but are not food aliases without explicit approval.
-_Avoid_: Learned food, default food
+**Food Quantity**:
+The consumed amount expressed in grams or a recognized food measure, such as a cup or an egg.
+_Avoid_: Amount, serving size
 
-**Meal Draft**:
-A named or ad hoc collection of food quantities being assembled before consumption is recorded. It may define a total yield by weight or serving count so that only a consumed portion is recorded.
-_Avoid_: Recipe, logged meal
+**Consumption Report**:
+A single submission containing one or more Consumption Events for the same calendar day. Either every event in the report is recorded or none are.
+_Avoid_: Utterance, request, batch
 
-**Draft Yield**:
-The final cooked weight or serving count across which a meal draft's total nutrition is distributed.
-_Avoid_: Recipe weight, batch size
+**Calendar Week**:
+A Monday-through-Sunday period containing Consumption Events according to their calendar day, using the operating system's current local timezone.
+_Avoid_: Rolling week, last seven days
 
-**Consumption Entry**:
-A snapshot of a quantity of food recorded as consumed by a profile at an explicit consumption time. Corrections replace or reverse entries without erasing their history.
-_Avoid_: Food log, meal entry
-
-**Pending Consumption**:
-A reported quantity of food whose nutrition cannot yet be resolved. It remains excluded from confirmed totals until it becomes a consumption entry.
-_Avoid_: Estimated entry, failed lookup
-
-**Confirmed Total**:
-The nutrition sum of consumption entries for a profile and period. Pending consumption is excluded, and its presence makes the total explicitly incomplete.
-_Avoid_: Estimated total, current macros
-
-**Nutrition Source**:
-The authority from which a food reference's nutrition values originated, such as a package label, public dataset, or profile-defined value.
-_Avoid_: Provider, database
-
-**Daily Target**:
-A profile's effective-dated desired calories, protein, carbohydrates, fat, and fiber against which consumption entries are totaled in the profile's local timezone.
-_Avoid_: Macro goal, allowance
+**Weekly Nutrition Totals**:
+The descriptive sums of calories, protein, carbohydrates, and fat from Consumption Events in a Calendar Week. They are not targets or recommendations.
+_Avoid_: Weekly goals, macro targets

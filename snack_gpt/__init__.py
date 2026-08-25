@@ -1,0 +1,1 @@
+"""Snack-GPT application package."""
