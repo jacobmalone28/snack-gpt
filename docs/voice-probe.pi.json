@@ -17,6 +17,7 @@
     "/opt/snack-gpt/models/embedding_model.onnx",
     "/opt/snack-gpt/bin/whisper-probe",
     "/opt/snack-gpt/bin/whisper-cli",
+    "/opt/snack-gpt/bin/whisper-cli.commit",
     "/opt/snack-gpt/models/ggml-tiny.en.bin",
     "/opt/snack-gpt/bin/needle-probe",
     "/opt/snack-gpt/lib/libneedle.so",

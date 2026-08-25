@@ -194,6 +194,15 @@ class VoiceAdapterTests(unittest.TestCase):
         self.assertIn("en_US-lessac-low.onnx", script)
         self.assertIn('write_adapter "$BIN/piper-worker" piper-worker', script)
 
+    def test_provisioning_script_reuses_matching_whisper_build(self) -> None:
+        script = Path("scripts/provision-voice-probe.sh").read_text(encoding="utf-8")
+
+        self.assertNotIn('rm -rf "$VENV" "$SOURCE/whisper.cpp"', script)
+        self.assertIn('WHISPER_BUILD_COMMIT=$BIN/whisper-cli.commit', script)
+        self.assertIn('$SOURCE/whisper.cpp/models/download-ggml-model.sh', script)
+        self.assertIn('cmp --silent "$BIN/whisper-cli"', script)
+        self.assertIn('Reusing whisper.cpp $WHISPER_TAG build.', script)
+
     def _run_adapter(self, environment: dict[str, str], *arguments: object) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "snack_gpt.voice_adapters", *(str(argument) for argument in arguments)],

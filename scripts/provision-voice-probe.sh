@@ -101,7 +101,7 @@ python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' || {
 }
 
 install -d -m 0755 "$BIN" "$MODELS" "$LIB" "$PROBE"
-rm -rf "$VENV" "$SOURCE/whisper.cpp"
+rm -rf "$VENV"
 install -d -m 0755 "$SOURCE"
 python3 -m venv "$VENV"
 PYTHON=$VENV/bin/python
@@ -144,14 +144,31 @@ echo "Downloading Needle ARM64 engine..."
 "$VENV/bin/needle" fetch --out "$LIB" --platform-tag manylinux2014_aarch64
 [[ -s $LIB/libneedle.so ]] || { echo "Needle ARM64 engine was not downloaded." >&2; exit 1; }
 
-echo "Building whisper.cpp $WHISPER_TAG..."
-git clone --branch "$WHISPER_TAG" --depth 1 https://github.com/ggml-org/whisper.cpp.git "$SOURCE/whisper.cpp"
-[[ $(git -C "$SOURCE/whisper.cpp" rev-parse HEAD) == "$WHISPER_COMMIT" ]] || { echo "Unexpected whisper.cpp commit." >&2; exit 1; }
-cmake -S "$SOURCE/whisper.cpp" -B "$SOURCE/whisper.cpp/build" \
-    -DCMAKE_BUILD_TYPE=Release -DGGML_BLAS=ON
-cmake --build "$SOURCE/whisper.cpp/build" --config Release --parallel 2 --target whisper-cli
-install -m 0755 "$SOURCE/whisper.cpp/build/bin/whisper-cli" "$BIN/whisper-cli"
-"$SOURCE/whisper.cpp/models/download-ggml-model.sh" tiny.en "$MODELS"
+WHISPER_BUILD_COMMIT=$BIN/whisper-cli.commit
+WHISPER_SOURCE_COMMIT=$(git -C "$SOURCE/whisper.cpp" rev-parse HEAD 2>/dev/null || true)
+if [[ ! -f $WHISPER_BUILD_COMMIT && $WHISPER_SOURCE_COMMIT == "$WHISPER_COMMIT" ]] &&
+    [[ -x $BIN/whisper-cli && -x $SOURCE/whisper.cpp/build/bin/whisper-cli ]] &&
+    cmp --silent "$BIN/whisper-cli" "$SOURCE/whisper.cpp/build/bin/whisper-cli"; then
+    printf '%s\n' "$WHISPER_COMMIT" >"$WHISPER_BUILD_COMMIT"
+fi
+if [[ -x $BIN/whisper-cli && -x $SOURCE/whisper.cpp/models/download-ggml-model.sh ]] &&
+    [[ $WHISPER_SOURCE_COMMIT == "$WHISPER_COMMIT" && -f $WHISPER_BUILD_COMMIT ]] &&
+    [[ $(<$WHISPER_BUILD_COMMIT) == "$WHISPER_COMMIT" ]]; then
+    echo "Reusing whisper.cpp $WHISPER_TAG build."
+else
+    echo "Building whisper.cpp $WHISPER_TAG..."
+    rm -rf "$SOURCE/whisper.cpp"
+    git clone --branch "$WHISPER_TAG" --depth 1 https://github.com/ggml-org/whisper.cpp.git "$SOURCE/whisper.cpp"
+    [[ $(git -C "$SOURCE/whisper.cpp" rev-parse HEAD) == "$WHISPER_COMMIT" ]] || { echo "Unexpected whisper.cpp commit." >&2; exit 1; }
+    cmake -S "$SOURCE/whisper.cpp" -B "$SOURCE/whisper.cpp/build" \
+        -DCMAKE_BUILD_TYPE=Release -DGGML_BLAS=ON
+    cmake --build "$SOURCE/whisper.cpp/build" --config Release --parallel 2 --target whisper-cli
+    install -m 0755 "$SOURCE/whisper.cpp/build/bin/whisper-cli" "$BIN/whisper-cli"
+    printf '%s\n' "$WHISPER_COMMIT" >"$WHISPER_BUILD_COMMIT"
+fi
+if ! echo "$WHISPER_MODEL_SHA1  $MODELS/ggml-tiny.en.bin" | sha1sum --check --status 2>/dev/null; then
+    "$SOURCE/whisper.cpp/models/download-ggml-model.sh" tiny.en "$MODELS"
+fi
 echo "$WHISPER_MODEL_SHA1  $MODELS/ggml-tiny.en.bin" | sha1sum --check --status || {
     echo "Whisper tiny.en checksum mismatch." >&2
     exit 1

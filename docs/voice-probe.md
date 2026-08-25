@@ -19,6 +19,10 @@ Python runtimes, builds pinned whisper.cpp source, downloads all models, install
 the adapters, and records a 16 kHz mono WAV fixture. At the recording prompt,
 say "Hey Jarvis, I ate two eggs."
 
+Subsequent provisioning runs reuse whisper.cpp when the installed binary's
+recorded source commit matches the pinned commit. A missing binary or changed
+pin triggers a clean rebuild; an intact Whisper model is also reused.
+
 When one hardware capture device is present, the script selects it instead of
 using ALSA's potentially playback-only `default` mapping. To choose from
 multiple devices, list them with `arecord --list-devices` and pass the card and
