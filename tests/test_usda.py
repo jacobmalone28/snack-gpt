@@ -25,7 +25,12 @@ class FoodDataCentralSearchTests(unittest.TestCase):
                     {"nutrient": {"name": "Total lipid (fat)", "unitName": "g"}, "amount": 9.51},
                 ],
                 "foodPortions": [
-                    {"gramWeight": 50, "modifier": "large", "measureUnit": {"name": "egg"}}
+                    {
+                        "gramWeight": 50,
+                        "modifier": "large",
+                        "portionDescription": "1 cup, cooked",
+                        "measureUnit": {"name": "egg"},
+                    }
                 ],
             },
         }
@@ -46,6 +51,8 @@ class FoodDataCentralSearchTests(unittest.TestCase):
         self.assertEqual(result.nutrients_per_100_grams["calories"], 143.0)
         self.assertEqual(result.measures["large"], 50.0)
         self.assertEqual(result.measures["egg"], 50.0)
+        self.assertEqual(result.measures["1 cup, cooked"], 50.0)
+        self.assertEqual(result.measures["cup"], 50.0)
 
 
 if __name__ == "__main__":

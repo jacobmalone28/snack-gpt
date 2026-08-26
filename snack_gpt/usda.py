@@ -1,5 +1,6 @@
 from collections.abc import Callable, Mapping
 import json
+import re
 from typing import cast
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -115,8 +116,18 @@ def _measures(value: object) -> dict[str, float]:
             aliases.append(measure_unit.get("name"))
         for alias in aliases:
             if isinstance(alias, str) and alias.strip():
-                measures.setdefault(alias.strip().lower(), float(gram_weight))
+                for normalized_alias in _measure_aliases(alias):
+                    measures.setdefault(normalized_alias, float(gram_weight))
     return measures
+
+
+def _measure_aliases(alias: str) -> tuple[str, ...]:
+    normalized = alias.strip().lower()
+    match = re.match(r"^(?:\d+(?:\.\d+)?|\d+/\d+)\s+([^,(]+)", normalized)
+    if match is None:
+        return (normalized,)
+    unit = match.group(1).strip()
+    return (normalized, unit)
 
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
