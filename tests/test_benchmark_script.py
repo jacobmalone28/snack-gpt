@@ -17,6 +17,12 @@ class BenchmarkScriptTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_does_not_require_unprovisioned_gnu_time(self) -> None:
+        source = self.script.read_text(encoding="utf-8")
+
+        self.assertNotIn("/usr/bin/time", source)
+        self.assertIn("/proc/$process_id/status", source)
+
     def test_help_describes_reports_without_pi_preflight(self) -> None:
         result = subprocess.run(
             ["bash", str(self.script), "--help"],

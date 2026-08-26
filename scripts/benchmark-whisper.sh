@@ -103,7 +103,6 @@ INDEX_PATH=$OUTPUT_DIRECTORY/runs.tsv
 for command in awk bwrap cmake git grep sha256sum shuf timeout; do
     command -v "$command" >/dev/null 2>&1 || die "required command is missing: $command"
 done
-[[ -x /usr/bin/time ]] || die "/usr/bin/time is missing; install the Debian time package"
 [[ -x $PYTHON ]] || PYTHON=$(command -v python3 || true)
 [[ -n $PYTHON && -x $PYTHON ]] || die "Python 3 is required"
 [[ -x $WHISPER_BINARY ]] || die "missing Whisper binary: $WHISPER_BINARY"
@@ -149,6 +148,29 @@ snapshot_pi() {
     } > "$destination"
 }
 
+process_tree_rss_kib() {
+    local root_pid=$1 process_id rss_kib children_path child
+    local total_kib=0
+    local -a pending=("$root_pid") children=()
+
+    while ((${#pending[@]})); do
+        process_id=${pending[0]}
+        pending=("${pending[@]:1}")
+        if [[ -r /proc/$process_id/status ]]; then
+            rss_kib=$(awk '/^VmRSS:/ { print $2; exit }' "/proc/$process_id/status")
+            total_kib=$((total_kib + ${rss_kib:-0}))
+        fi
+        children_path=/proc/$process_id/task/$process_id/children
+        if [[ -r $children_path ]]; then
+            read -r -a children < "$children_path" || true
+            for child in "${children[@]}"; do
+                pending+=("$child")
+            done
+        fi
+    done
+    printf '%s\n' "$total_kib"
+}
+
 capture_evidence() {
     cat "$PREFIX/bin/whisper-cli.commit" > "$EVIDENCE_DIRECTORY/whisper-commit.txt"
     sha256sum "$WHISPER_BINARY" "$WHISPER_MODEL" "$WHISPER_AUDIO" \
@@ -185,8 +207,8 @@ benchmark_one() {
     local model=$5
     local openblas_threads=$6
     shift 6
-    local run_id run_directory output_prefix started_ns finished_ns status
-    local accepted=false peak_rss_bytes=0
+    local run_id run_directory output_prefix started_ns finished_ns status command_pid
+    local accepted=false current_rss_kib=0 peak_rss_kib=0 peak_rss_bytes=0
     local -a command
 
     run_id=$(date -u +%Y%m%dT%H%M%S)-$(date +%N)
@@ -225,10 +247,18 @@ benchmark_one() {
     started_ns=$(date +%s%N)
 
     set +e
-    /usr/bin/time -v -o "$run_directory/resource.txt" \
-        "${command[@]}" \
+    "${command[@]}" \
         > "$run_directory/stdout.txt" \
-        2> "$run_directory/stderr.txt"
+        2> "$run_directory/stderr.txt" &
+    command_pid=$!
+    while kill -0 "$command_pid" 2>/dev/null; do
+        current_rss_kib=$(process_tree_rss_kib "$command_pid")
+        if ((current_rss_kib > peak_rss_kib)); then
+            peak_rss_kib=$current_rss_kib
+        fi
+        sleep 0.01
+    done
+    wait "$command_pid"
     status=$?
     set -e
 
@@ -245,10 +275,8 @@ benchmark_one() {
         accepted=true
     fi
     printf '%s\n' "$accepted" > "$run_directory/accepted.txt"
-    peak_rss_bytes=$(awk -F: \
-        '/Maximum resident set size/ { gsub(/^[[:space:]]+/, "", $2); print $2 * 1024 }' \
-        "$run_directory/resource.txt")
-    peak_rss_bytes=${peak_rss_bytes:-0}
+    peak_rss_bytes=$((peak_rss_kib * 1024))
+    printf 'peak_rss_bytes=%s\n' "$peak_rss_bytes" > "$run_directory/resource.txt"
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$phase" "$configuration" "$warmup" "$accepted" \

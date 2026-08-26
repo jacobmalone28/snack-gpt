@@ -46,15 +46,9 @@ Keep that report. It records the end-to-end baseline and evidence hashes. Stop
 if the probe fails transcript, extraction, offline, or hardware acceptance;
 tuning a failing baseline would confound the results.
 
-Install GNU `time` while the Pi is still network-connected if `/usr/bin/time`
-is absent:
-
-```console
-sudo apt-get update
-sudo apt-get install time
-```
-
-No benchmarked inference command needs network access.
+No benchmarked inference command needs network access. The automated script
+samples peak process-tree RSS from Linux `/proc`, so it does not require the
+optional GNU `time` package.
 
 ## 2. Create a run directory and capture evidence
 
