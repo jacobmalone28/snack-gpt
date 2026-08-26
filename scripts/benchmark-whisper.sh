@@ -121,7 +121,7 @@ if [[ -n $QUANT_MODEL ]]; then
 fi
 if [[ $SKIP_BLAS == false ]]; then
     [[ -f $WHISPER_SOURCE/CMakeLists.txt ]] || die "missing Whisper source: $WHISPER_SOURCE"
-    SOURCE_COMMIT=$(git -C "$WHISPER_SOURCE" rev-parse HEAD)
+    SOURCE_COMMIT=$(git -c safe.directory="$WHISPER_SOURCE" -C "$WHISPER_SOURCE" rev-parse HEAD)
     [[ $SOURCE_COMMIT == "$WHISPER_COMMIT" ]] || {
         die "Whisper source $SOURCE_COMMIT does not match installed commit $WHISPER_COMMIT"
     }
