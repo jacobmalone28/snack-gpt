@@ -8,17 +8,23 @@ Snack-GPT is a local, single-person food logger with a server-rendered web inter
 
 ## Run locally
 
-Check configuration and initialize the database:
+Install the project and create local configuration:
 
 ```console
-python -m snack_gpt check
+python3 -m pip install -e .
+cp .env.example .env
+```
+
+Set `USDA_FDC_API_KEY` in `.env`, then check configuration and initialize the database:
+
+```console
+python3 -m snack_gpt check
 ```
 
 Start the local web application:
 
 ```console
-export USDA_FDC_API_KEY="your-api-key"
-python -m snack_gpt serve
+python3 -m snack_gpt serve
 ```
 
 Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available at <http://127.0.0.1:8000/health>.
@@ -33,6 +39,7 @@ Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available
 | `USDA_FDC_API_KEY` | none | USDA FoodData Central API key required to create Consumption Events |
 
 Invalid values fail before the database or server is opened. Keep the default host unless LAN access has been configured and secured.
+Values exported in the shell take precedence over values in `.env`. The `.env` file is ignored by Git; use `.env.example` as the checked-in template.
 
 ## Raspberry Pi voice acceptance
 

@@ -1,3 +1,6 @@
 __pycache__/
 *.py[cod]
 snack-gpt.sqlite3
+.env
+.env.*
+!.env.example

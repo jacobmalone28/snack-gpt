@@ -11,6 +11,31 @@ from urllib.request import urlopen
 
 
 class CliTests(unittest.TestCase):
+    def test_check_loads_dotenv_without_overriding_exported_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            working_directory = Path(directory)
+            database_path = working_directory / "from-dotenv.sqlite3"
+            (working_directory / ".env").write_text(
+                f"SNACK_GPT_DATABASE={database_path}\nSNACK_GPT_PORT=not-a-port\n"
+            )
+            environment = os.environ | {
+                "PYTHONPATH": str(Path(__file__).parents[1]),
+                "SNACK_GPT_PORT": "8000",
+            }
+            environment.pop("SNACK_GPT_DATABASE", None)
+
+            result = subprocess.run(
+                [sys.executable, "-m", "snack_gpt", "check"],
+                capture_output=True,
+                check=False,
+                cwd=working_directory,
+                env=environment,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(database_path.is_file())
+
     def test_check_reports_invalid_port_without_creating_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "snack-gpt.sqlite3"
@@ -76,12 +101,15 @@ class CliTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 text=True,
             )
+            stderr = process.stderr
+            if stderr is None:
+                self.fail("Server process has no stderr pipe")
             deadline = time.monotonic() + 3
 
             try:
                 while True:
                     if process.poll() is not None:
-                        self.fail(f"Server exited early: {process.stderr.read()}")
+                        self.fail(f"Server exited early: {stderr.read()}")
                     try:
                         with urlopen(f"http://127.0.0.1:{port}/health", timeout=0.1) as response:
                             break

@@ -1,7 +1,10 @@
 import os
+from pathlib import Path
 import sys
 from collections.abc import Sequence
 from wsgiref.simple_server import make_server
+
+from dotenv import load_dotenv
 
 from snack_gpt.config import ConfigurationError, Settings
 from snack_gpt.http import create_application
@@ -13,6 +16,8 @@ def run(arguments: Sequence[str]) -> int:
     if command not in (("check",), ("serve",)):
         print("Usage: snack-gpt {check,serve}", file=sys.stderr)
         return 2
+
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 
     try:
         settings = Settings.from_environment(os.environ)
