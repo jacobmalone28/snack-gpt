@@ -18,7 +18,7 @@ class StorageTests(unittest.TestCase):
                 restarted_storage.initialize()
                 restarted_health = restarted_storage.health()
 
-            self.assertEqual(first_health.schema_version, 1)
+            self.assertEqual(first_health.schema_version, 2)
             self.assertTrue(first_health.writable)
             self.assertEqual(restarted_health, first_health)
 

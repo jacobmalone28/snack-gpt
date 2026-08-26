@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 import sqlite3
 from types import TracebackType
@@ -9,6 +10,26 @@ from typing import Self
 class StorageHealth:
     schema_version: int
     writable: bool
+
+
+@dataclass(frozen=True)
+class NutritionSnapshot:
+    calories: float
+    protein: float
+    carbohydrates: float
+    fat: float
+
+
+@dataclass(frozen=True)
+class ConsumptionEvent:
+    event_id: str
+    revision: int
+    day: date
+    usda_food_id: str
+    food_description: str
+    quantity_value: float
+    quantity_measure: str
+    nutrition: NutritionSnapshot
 
 
 class Storage:
@@ -39,6 +60,80 @@ class Storage:
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version) VALUES (1)"
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS consumption_events (
+                    event_id TEXT PRIMARY KEY,
+                    revision INTEGER NOT NULL,
+                    day TEXT NOT NULL,
+                    usda_food_id TEXT NOT NULL,
+                    food_description TEXT NOT NULL,
+                    quantity_value REAL NOT NULL,
+                    quantity_measure TEXT NOT NULL,
+                    calories REAL NOT NULL,
+                    protein REAL NOT NULL,
+                    carbohydrates REAL NOT NULL,
+                    fat REAL NOT NULL
+                )
+                """
+            )
+            self._connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (2)"
+            )
+
+    def create_consumption_event(self, event: ConsumptionEvent) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO consumption_events (
+                    event_id, revision, day, usda_food_id, food_description,
+                    quantity_value, quantity_measure, calories, protein,
+                    carbohydrates, fat
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.event_id,
+                    event.revision,
+                    event.day.isoformat(),
+                    event.usda_food_id,
+                    event.food_description,
+                    event.quantity_value,
+                    event.quantity_measure,
+                    event.nutrition.calories,
+                    event.nutrition.protein,
+                    event.nutrition.carbohydrates,
+                    event.nutrition.fat,
+                ),
+            )
+
+    def list_consumption_events(self) -> list[ConsumptionEvent]:
+        rows = self._connection.execute(
+            """
+            SELECT event_id, revision, day, usda_food_id, food_description,
+                   quantity_value, quantity_measure, calories, protein,
+                   carbohydrates, fat
+            FROM consumption_events
+            ORDER BY day, rowid
+            """
+        ).fetchall()
+        return [
+            ConsumptionEvent(
+                event_id=str(row[0]),
+                revision=int(row[1]),
+                day=date.fromisoformat(str(row[2])),
+                usda_food_id=str(row[3]),
+                food_description=str(row[4]),
+                quantity_value=float(row[5]),
+                quantity_measure=str(row[6]),
+                nutrition=NutritionSnapshot(
+                    calories=float(row[7]),
+                    protein=float(row[8]),
+                    carbohydrates=float(row[9]),
+                    fat=float(row[10]),
+                ),
+            )
+            for row in rows
+        ]
 
     def health(self) -> StorageHealth:
         row = self._connection.execute(

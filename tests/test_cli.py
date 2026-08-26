@@ -52,7 +52,7 @@ class CliTests(unittest.TestCase):
             )
 
             self.assertEqual(first_result.returncode, 0)
-            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 1)\n")
+            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 2)\n")
             self.assertEqual(second_result.returncode, 0)
             self.assertEqual(second_result.stdout, first_result.stdout)
             self.assertTrue(database_path.is_file())

@@ -12,6 +12,7 @@ class Settings:
     database_path: Path
     host: str
     port: int
+    usda_api_key: str | None = None
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "Settings":
@@ -27,4 +28,5 @@ class Settings:
             database_path=Path(environment.get("SNACK_GPT_DATABASE", "snack-gpt.sqlite3")),
             host=environment.get("SNACK_GPT_HOST", "127.0.0.1"),
             port=port,
+            usda_api_key=environment.get("USDA_FDC_API_KEY"),
         )

@@ -1,6 +1,6 @@
 # Snack-GPT
 
-Snack-GPT is a local, single-person food logger. The current bootstrap serves an application and storage status page backed by SQLite.
+Snack-GPT is a local, single-person food logger with a server-rendered web interface backed by SQLite.
 
 ## Requirements
 
@@ -17,6 +17,7 @@ python -m snack_gpt check
 Start the local web application:
 
 ```console
+export USDA_FDC_API_KEY="your-api-key"
 python -m snack_gpt serve
 ```
 
@@ -29,6 +30,7 @@ Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available
 | `SNACK_GPT_DATABASE` | `snack-gpt.sqlite3` | SQLite database path |
 | `SNACK_GPT_HOST` | `127.0.0.1` | Web server bind address |
 | `SNACK_GPT_PORT` | `8000` | Web server port |
+| `USDA_FDC_API_KEY` | none | USDA FoodData Central API key required to create Consumption Events |
 
 Invalid values fail before the database or server is opened. Keep the default host unless LAN access has been configured and secured.
 

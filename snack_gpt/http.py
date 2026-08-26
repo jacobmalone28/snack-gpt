@@ -1,17 +1,25 @@
 from collections.abc import Callable, Iterable
+from datetime import date
 from html import escape
 import json
-from typing import TypeAlias
+from typing import BinaryIO, TypeAlias, cast
+from urllib.parse import parse_qs
 
 from snack_gpt.config import Settings
+from snack_gpt.ingestion import IngestionError, UsdaSearch, create_consumption_event
 from snack_gpt.storage import Storage
+from snack_gpt.usda import FoodDataCentralSearch
 
 
 StartResponse: TypeAlias = Callable[[str, list[tuple[str, str]]], object]
 Application: TypeAlias = Callable[[dict[str, object], StartResponse], Iterable[bytes]]
 
 
-def create_application(settings: Settings) -> Application:
+def create_application(settings: Settings, usda_search: UsdaSearch | None = None) -> Application:
+    configured_usda_search = usda_search
+    if configured_usda_search is None and settings.usda_api_key:
+        configured_usda_search = FoodDataCentralSearch(settings.usda_api_key)
+
     with Storage(settings.database_path) as storage:
         storage.initialize()
 
@@ -19,6 +27,36 @@ def create_application(settings: Settings) -> Application:
         environment: dict[str, object], start_response: StartResponse
     ) -> Iterable[bytes]:
         path = str(environment.get("PATH_INFO", "/"))
+        method = str(environment.get("REQUEST_METHOD", "GET"))
+        if path == "/consumption-events" and method == "POST":
+            if configured_usda_search is None:
+                return _plain_response(
+                    start_response,
+                    "503 Service Unavailable",
+                    "USDA food search is not configured.\n",
+                )
+            content_length = int(str(environment.get("CONTENT_LENGTH", "0") or "0"))
+            request_stream = cast(BinaryIO, environment["wsgi.input"])
+            request_body = request_stream.read(content_length)
+            form = parse_qs(request_body.decode("utf-8"), keep_blank_values=True)
+            try:
+                with Storage(settings.database_path) as storage:
+                    event = create_consumption_event(
+                        storage,
+                        configured_usda_search,
+                        food=_form_value(form, "food"),
+                        quantity=_form_value(form, "quantity"),
+                        measure=_form_value(form, "measure"),
+                        day=_form_value(form, "day"),
+                    )
+            except IngestionError as error:
+                return _plain_response(start_response, "422 Unprocessable Entity", f"{error}\n")
+            return _plain_response(
+                start_response,
+                "201 Created",
+                f"Created Consumption Event for {event.food_description}.\n",
+            )
+
         if path not in {"/", "/health"}:
             body = b"Not found\n"
             start_response(
@@ -63,6 +101,12 @@ def create_application(settings: Settings) -> Application:
     dl {{ display: grid; grid-template-columns: 1fr auto; gap: 0.75rem 2rem; border-block: 1px solid #a8a396; padding: 1.25rem 0; }}
     dt {{ font-weight: 700; }} dd {{ margin: 0; }}
     .ready {{ color: #17653a; }}
+    form {{ display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 1rem; margin-top: 2rem; }}
+    label {{ display: grid; gap: 0.4rem; font-weight: 700; }}
+    label:first-child, label:last-of-type, button {{ grid-column: 1 / -1; }}
+    input {{ box-sizing: border-box; width: 100%; padding: 0.7rem; border: 1px solid #767268; background: #fff; font: inherit; }}
+    button {{ padding: 0.8rem; border: 0; background: #18211b; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }}
+    @media (max-width: 32rem) {{ form {{ grid-template-columns: 1fr; }} label, label:first-child, label:last-of-type, button {{ grid-column: 1; }} }}
   </style>
 </head>
 <body>
@@ -73,6 +117,13 @@ def create_application(settings: Settings) -> Application:
       <dt>Storage</dt><dd>{escape(storage_status)}</dd>
       <dt>Database</dt><dd>Schema {health.schema_version}</dd>
     </dl>
+        <form action="/consumption-events" method="post">
+            <label>Food <input name="food" type="search" required></label>
+            <label>Quantity <input name="quantity" type="number" min="0.01" step="any" required></label>
+            <label>Measure <input name="measure" value="grams" required></label>
+            <label>Day <input name="day" type="date" value="{date.today().isoformat()}" max="{date.today().isoformat()}" required></label>
+            <button type="submit">Create Consumption Event</button>
+        </form>
   </main>
 </body>
 </html>
@@ -87,3 +138,18 @@ def create_application(settings: Settings) -> Application:
         return [home_page]
 
     return application
+
+
+def _plain_response(
+    start_response: StartResponse, status: str, text: str
+) -> Iterable[bytes]:
+    body = text.encode()
+    start_response(
+        status,
+        [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))],
+    )
+    return [body]
+
+
+def _form_value(form: dict[str, list[str]], name: str) -> str:
+    return form.get(name, [""])[0]
