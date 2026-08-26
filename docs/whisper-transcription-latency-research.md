@@ -7,9 +7,17 @@ Target: Raspberry Pi 3 Model B Plus, 64-bit Raspberry Pi OS, `tiny.en`
 
 ## Conclusion
 
-There is no source-backed flag combination that can be claimed to reduce the
-measured 22.43-second transcription to the required 9.16 seconds. The next step
-is a controlled benchmark on the Pi, not a production change.
+> **Benchmark update:** On 2026-08-26, five isolated Pi runs with `-t 4 -ac
+> 512` all retained `two` and `eggs`. Median transcription wall time was 5.126
+> seconds (4.918-5.199 seconds), compared with 23.467 seconds at default audio
+> context. The Pi manifest now uses `-ac 512`. A fresh end-to-end voice probe
+> must still confirm the projected processing time, and this single fixture
+> does not remove upstream's experimental quality warning.
+
+The source review alone identified no flag combination that could be claimed to
+reduce the measured 22.43-second transcription to the required 9.16 seconds.
+The subsequent controlled Pi benchmark supplied that missing device evidence
+for `-ac 512`, subject to the fixture-specific quality limitation above.
 
 Test in this order:
 

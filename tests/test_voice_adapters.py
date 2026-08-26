@@ -46,6 +46,7 @@ class VoiceAdapterTests(unittest.TestCase):
 
                     arguments = sys.argv[1:]
                     if "-of" in arguments:
+                        assert arguments[arguments.index("-ac") + 1] == "512"
                         Path(arguments[arguments.index("-of") + 1] + ".txt").write_text("I ate two eggs")
                     elif "-f" in arguments:
                         Path(arguments[arguments.index("-f") + 1]).write_bytes(b"RIFFspeech")
@@ -73,6 +74,8 @@ class VoiceAdapterTests(unittest.TestCase):
                 sys.executable,
                 "--binary-argument",
                 fake_binary,
+                "--binary-argument=-ac",
+                "--binary-argument=512",
                 "--model",
                 model,
                 "--audio",
@@ -205,6 +208,13 @@ class VoiceAdapterTests(unittest.TestCase):
         self.assertIn('$SOURCE/whisper.cpp/models/download-ggml-model.sh', script)
         self.assertIn('cmp --silent "$BIN/whisper-cli"', script)
         self.assertIn('Reusing whisper.cpp $WHISPER_TAG build.', script)
+
+    def test_pi_manifest_uses_benchmarked_whisper_audio_context(self) -> None:
+        manifest = json.loads(Path("docs/voice-probe.pi.json").read_text(encoding="utf-8"))
+
+        transcription = manifest["commands"]["transcription"]
+        self.assertIn("--binary-argument=-ac", transcription)
+        self.assertIn("--binary-argument=512", transcription)
 
     def _run_adapter(self, environment: dict[str, str], *arguments: object) -> None:
         result = subprocess.run(

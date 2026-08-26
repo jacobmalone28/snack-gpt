@@ -74,6 +74,13 @@ Piper is preloaded before timing through a local Unix socket because the
 application keeps feedback available while listening; worker memory remains
 included in each stage's peak measurement.
 
+The Pi manifest passes whisper.cpp `-ac 512`. On the provisioned fixture, five
+measured runs retained `two` and `eggs` with a 5.126-second median, compared
+with 23.467 seconds at the default audio context. whisper.cpp labels this
+setting experimental and warns that reducing audio context can reduce quality;
+the probe therefore verifies the representative phrase but does not establish
+general transcription accuracy.
+
 ## Run
 
 Copy the example manifest outside the checkout if paths need local changes, then

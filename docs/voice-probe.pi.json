@@ -70,6 +70,8 @@
       "/opt/snack-gpt/bin/whisper-probe",
       "--binary",
       "/opt/snack-gpt/bin/whisper-cli",
+      "--binary-argument=-ac",
+      "--binary-argument=512",
       "--model",
       "/opt/snack-gpt/models/ggml-tiny.en.bin",
       "--audio",
