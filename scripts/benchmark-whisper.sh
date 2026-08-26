@@ -162,6 +162,7 @@ process_tree_rss_kib() {
         fi
         children_path=/proc/$process_id/task/$process_id/children
         if [[ -r $children_path ]]; then
+            children=()
             read -r -a children < "$children_path" || true
             for child in "${children[@]}"; do
                 pending+=("$child")
