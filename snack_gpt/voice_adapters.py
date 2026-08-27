@@ -13,6 +13,8 @@ import sys
 from typing import Protocol, cast
 import wave
 
+from snack_gpt.voice import parse_consumption_report
+
 
 class AdapterError(Exception):
     pass
@@ -118,58 +120,70 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
     extractor = cast(Callable[..., object], getattr(needle_module, "extract"))
     schema = {
         "name": "log_food_intake",
-        "description": "Log foods and quantities that the user says they consumed.",
+        "description": "Extract one food and its explicit Food Quantity from the owner's words.",
         "parameters": {
             "type": "object",
             "properties": {
                 "foods": {
                     "type": "array",
-                    "description": "Every food the user consumed.",
+                    "description": "The food the owner consumed.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "food": {"type": "string", "description": "Consumed food."},
+                            "food": {
+                                "type": "string",
+                                "description": (
+                                    "USDA search term preserving spoken preparation, form, and other "
+                                    "food qualifiers; never a USDA identifier or claimed canonical description."
+                                ),
+                            },
                             "quantity": {
                                 "type": "number",
-                                "description": "Quantity consumed.",
+                                "description": "Finite numeric quantity explicitly spoken by the owner.",
                                 "exclusiveMinimum": 0,
                             },
+                            "measure": {
+                                "type": "string",
+                                "description": (
+                                    "Spoken unit or food measure only; never a gram weight or conversion factor."
+                                ),
+                            },
                         },
-                        "required": ["food", "quantity"],
+                        "required": ["food", "quantity", "measure"],
+                        "additionalProperties": False,
                     },
                     "minItems": 1,
+                    "maxItems": 1,
                 }
             },
             "required": ["foods"],
+            "additionalProperties": False,
         },
     }
     extraction_arguments: dict[str, object] = {}
     if model_path is not None:
         extraction_arguments["weights"] = str(model_path)
     result = extractor(transcript_path.read_text(encoding="utf-8"), schema, **extraction_arguments)
-    if not isinstance(result, dict):
-        raise AdapterError("Needle did not extract a food report")
-    _write_json(output_path, cast(dict[object, object], result))
+    report = parse_consumption_report(result)
+    _write_json(
+        output_path,
+        {
+            "foods": [
+                {
+                    "food": report.item.food,
+                    "quantity": report.item.quantity,
+                    "measure": report.item.measure,
+                }
+            ]
+        },
+    )
 
 
 def _speech_text(extraction_path: Path) -> str:
     value: object = json.loads(extraction_path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise AdapterError("extraction artifact must be a JSON object")
-    foods = cast(dict[object, object], value).get("foods")
-    if not isinstance(foods, list) or not foods:
-        raise AdapterError("extraction artifact contains no foods")
-    phrases: list[str] = []
-    for item in cast(list[object], foods):
-        if not isinstance(item, dict):
-            raise AdapterError("extraction artifact contains an invalid food")
-        food = cast(dict[object, object], item)
-        name = food.get("food")
-        quantity = food.get("quantity")
-        if not isinstance(name, str) or not isinstance(quantity, (int, float)):
-            raise AdapterError("extraction artifact contains an invalid food")
-        phrases.append(f"{quantity} {name}")
-    return "Recorded " + ", ".join(phrases) + "."
+    report = parse_consumption_report(value)
+    item = report.item
+    return f"Recorded {item.quantity:g} {item.measure} {item.food}."
 
 
 def _synthesize(
@@ -213,8 +227,9 @@ def _piper_worker(model_path: Path, socket_path: Path) -> None:
                     request = json.loads(connection.recv(65536).decode("utf-8"))
                     if not isinstance(request, dict):
                         raise ValueError("request must be an object")
-                    text = request.get("text")
-                    output_value = request.get("output")
+                    request_mapping = cast(dict[object, object], request)
+                    text = request_mapping.get("text")
+                    output_value = request_mapping.get("output")
                     if not isinstance(text, str) or not isinstance(output_value, str):
                         raise ValueError("request must contain text and output strings")
                     output_path = Path(output_value)

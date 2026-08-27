@@ -7,9 +7,89 @@ import tempfile
 import textwrap
 import time
 import unittest
+import wave
+
+from snack_gpt.voice import ExtractionError, parse_consumption_report
 
 
 class VoiceAdapterTests(unittest.TestCase):
+    def test_needle_output_is_parsed_into_a_typed_consumption_report(self) -> None:
+        report = parse_consumption_report(
+            {"foods": [{"food": "white rice cooked", "quantity": 0.75, "measure": "cup"}]}
+        )
+
+        self.assertEqual(report.item.food, "white rice cooked")
+        self.assertEqual(report.item.quantity, 0.75)
+        self.assertEqual(report.item.measure, "cup")
+
+    def test_malformed_needle_output_is_rejected(self) -> None:
+        cases: dict[str, object] = {
+            "non-object report": [],
+            "unknown top-level shape": {"foods": [], "transcript": "private"},
+            "empty report": {"foods": []},
+            "multiple items": {
+                "foods": [
+                    {"food": "egg", "quantity": 1, "measure": "large"},
+                    {"food": "toast", "quantity": 1, "measure": "slice"},
+                ]
+            },
+            "blank food": {"foods": [{"food": " ", "quantity": 1, "measure": "gram"}]},
+            "missing quantity": {"foods": [{"food": "egg", "measure": "large"}]},
+            "nonnumeric quantity": {
+                "foods": [{"food": "egg", "quantity": "one", "measure": "large"}]
+            },
+            "zero quantity": {"foods": [{"food": "egg", "quantity": 0, "measure": "large"}]},
+            "negative quantity": {"foods": [{"food": "egg", "quantity": -1, "measure": "large"}]},
+            "nan quantity": {"foods": [{"food": "egg", "quantity": float("nan"), "measure": "large"}]},
+            "infinite quantity": {
+                "foods": [{"food": "egg", "quantity": float("inf"), "measure": "large"}]
+            },
+            "missing measure": {"foods": [{"food": "egg", "quantity": 1}]},
+            "blank measure": {"foods": [{"food": "egg", "quantity": 1, "measure": " "}]},
+            "unknown item field": {
+                "foods": [{"food": "egg", "quantity": 1, "measure": "large", "fdc_id": 1}]
+            },
+        }
+        for name, value in cases.items():
+            with self.subTest(name=name), self.assertRaisesRegex(ExtractionError, ".+"):
+                parse_consumption_report(value)
+
+    def test_extract_adapter_does_not_write_malformed_needle_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            modules = root / "modules"
+            modules.mkdir()
+            (modules / "needle.py").write_text(
+                "def extract(text, schema, weights=None):\n"
+                "    return {'foods': [{'food': 'egg', 'quantity': 1}]}\n",
+                encoding="utf-8",
+            )
+            transcript = root / "transcript.txt"
+            transcript.write_text("I ate one egg", encoding="utf-8")
+            extraction = root / "extraction.json"
+            environment = os.environ | {"PYTHONPATH": f"{modules}{os.pathsep}{os.getcwd()}"}
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "snack_gpt.voice_adapters",
+                    "extract",
+                    "--transcript",
+                    str(transcript),
+                    "--output",
+                    str(extraction),
+                ],
+                capture_output=True,
+                check=False,
+                env=environment,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("food, quantity, and measure", result.stderr)
+            self.assertFalse(extraction.exists())
+
     def test_adapters_normalize_runtime_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -34,7 +114,10 @@ class VoiceAdapterTests(unittest.TestCase):
             (modules / "needle.py").write_text(
                 "def extract(text, schema, weights=None):\n"
                 "    assert schema['name'] == 'log_food_intake'\n"
-                "    return {'foods': [{'food': 'eggs', 'quantity': 2}]}\n",
+                "    item = schema['parameters']['properties']['foods']['items']\n"
+                "    assert item['required'] == ['food', 'quantity', 'measure']\n"
+                "    assert item['properties']['quantity']['exclusiveMinimum'] == 0\n"
+                "    return {'foods': [{'food': 'white rice cooked', 'quantity': 0.75, 'measure': 'cup'}]}\n",
                 encoding="utf-8",
             )
             fake_binary = root / "fake_binary.py"
@@ -87,7 +170,10 @@ class VoiceAdapterTests(unittest.TestCase):
 
             extraction = root / "extraction.json"
             self._run_adapter(environment, "extract", "--transcript", transcript, "--output", extraction)
-            self.assertEqual(json.loads(extraction.read_text())["foods"][0], {"food": "eggs", "quantity": 2})
+            self.assertEqual(
+                json.loads(extraction.read_text())["foods"][0],
+                {"food": "white rice cooked", "quantity": 0.75, "measure": "cup"},
+            )
 
             speech = root / "speech.wav"
             self._run_adapter(
@@ -120,7 +206,7 @@ class VoiceAdapterTests(unittest.TestCase):
                             return cls()
 
                         def synthesize_wav(self, text, output):
-                            output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+                            output.setparams((1, 1, 16000, 0, "NONE", "not compressed"))
                             output.writeframes(text.encode())
                     """
                 ),
@@ -150,7 +236,10 @@ class VoiceAdapterTests(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertTrue(socket_path.exists())
                 extraction = root / "extraction.json"
-                extraction.write_text('{"foods":[{"food":"egg","quantity":2}]}', encoding="utf-8")
+                extraction.write_text(
+                    '{"foods":[{"food":"egg","quantity":2,"measure":"large"}]}',
+                    encoding="utf-8",
+                )
                 speech = root / "speech.wav"
 
                 self._run_adapter(
@@ -164,7 +253,8 @@ class VoiceAdapterTests(unittest.TestCase):
                     speech,
                 )
 
-                self.assertGreater(speech.stat().st_size, 4)
+                with wave.open(str(speech), "rb") as output:
+                    self.assertEqual(output.readframes(output.getnframes()), b"Recorded 2 large egg.")
             finally:
                 worker.terminate()
                 worker.wait(timeout=5)

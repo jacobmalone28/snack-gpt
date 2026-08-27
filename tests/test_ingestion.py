@@ -27,17 +27,50 @@ INCOMPLETE_RESULT = FoodSearchResult(
     nutrients_per_100_grams={"calories": 100.0},
     measures={"large": 40.0},
 )
+COOKED_RICE_RESULT = FoodSearchResult(
+    usda_food_id="30",
+    description="Rice, white, long-grain, regular, cooked",
+    nutrients_per_100_grams={
+        "calories": 130.0,
+        "protein": 2.69,
+        "carbohydrates": 28.17,
+        "fat": 0.28,
+    },
+    measures={"cup": 200.0},
+)
 
 
 class ControlledUsdaSearch:
     def __init__(self, results: list[FoodSearchResult]) -> None:
         self._results = results
+        self.queries: list[str] = []
 
     def search(self, query: str) -> list[FoodSearchResult]:
+        self.queries.append(query)
         return self._results
 
 
 class IngestionTests(unittest.TestCase):
+    def test_preserves_food_qualifiers_and_normalizes_plural_measure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+                usda_search = ControlledUsdaSearch([COOKED_RICE_RESULT])
+
+                event = create_consumption_event(
+                    storage,
+                    usda_search,
+                    food=" white rice cooked ",
+                    quantity="0.75",
+                    measure=" Cups ",
+                    day="2026-08-25",
+                )
+
+        self.assertEqual(usda_search.queries, ["white rice cooked"])
+        self.assertEqual(event.quantity_value, 0.75)
+        self.assertEqual(event.quantity_measure, "cup")
+        self.assertEqual(event.nutrition.calories, 195.0)
+
     def test_selects_the_highest_ranked_complete_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with Storage(Path(directory) / "events.sqlite3") as storage:
@@ -56,14 +89,19 @@ class IngestionTests(unittest.TestCase):
 
     def test_invalid_submissions_create_no_event(self) -> None:
         cases = {
-            "missing quantity": ("", "grams", "2026-08-25", [COMPLETE_RESULT]),
-            "zero quantity": ("0", "grams", "2026-08-25", [COMPLETE_RESULT]),
-            "negative quantity": ("-1", "grams", "2026-08-25", [COMPLETE_RESULT]),
-            "unsupported measure": ("1", "bucket", "2026-08-25", [COMPLETE_RESULT]),
-            "future day": ("1", "grams", "2999-01-01", [COMPLETE_RESULT]),
-            "no complete result": ("1", "grams", "2026-08-25", [INCOMPLETE_RESULT]),
+            "blank food": (" ", "1", "grams", "2026-08-25", [COMPLETE_RESULT]),
+            "missing quantity": ("egg", "", "grams", "2026-08-25", [COMPLETE_RESULT]),
+            "nonnumeric quantity": ("egg", "one", "grams", "2026-08-25", [COMPLETE_RESULT]),
+            "zero quantity": ("egg", "0", "grams", "2026-08-25", [COMPLETE_RESULT]),
+            "negative quantity": ("egg", "-1", "grams", "2026-08-25", [COMPLETE_RESULT]),
+            "nan quantity": ("egg", "nan", "grams", "2026-08-25", [COMPLETE_RESULT]),
+            "infinite quantity": ("egg", "inf", "grams", "2026-08-25", [COMPLETE_RESULT]),
+            "blank measure": ("egg", "1", " ", "2026-08-25", [COMPLETE_RESULT]),
+            "unsupported measure": ("egg", "1", "bucket", "2026-08-25", [COMPLETE_RESULT]),
+            "future day": ("egg", "1", "grams", "2999-01-01", [COMPLETE_RESULT]),
+            "no complete result": ("egg", "1", "grams", "2026-08-25", [INCOMPLETE_RESULT]),
         }
-        for name, (quantity, measure, day, results) in cases.items():
+        for name, (food, quantity, measure, day, results) in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 with Storage(Path(directory) / "events.sqlite3") as storage:
                     storage.initialize()
@@ -71,7 +109,7 @@ class IngestionTests(unittest.TestCase):
                         create_consumption_event(
                             storage,
                             ControlledUsdaSearch(results),
-                            food="egg",
+                            food=food,
                             quantity=quantity,
                             measure=measure,
                             day=day,

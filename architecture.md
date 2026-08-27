@@ -46,7 +46,7 @@ Weekly Nutrition Totals are derived from snapshots for events dated Monday throu
 flowchart TD
     A[OpenWakeWord listens for Hey Jarvis] --> B[Capture speech]
     B --> C[Whisper transcribes locally]
-    C --> D[Needle extracts food and quantity pairs]
+    C --> D[Needle extracts food, quantity, and measure]
     D --> E{Complete and confident?}
     E -->|No| X[Play error sound and speak reason]
     E -->|Yes| F[Search USDA for each food]
