@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from pathlib import Path
 import json
 import tempfile
@@ -12,7 +13,7 @@ from wsgiref.simple_server import make_server
 from snack_gpt.config import Settings
 from snack_gpt.http import create_application
 from snack_gpt.ingestion import FoodSearchResult
-from snack_gpt.storage import Storage
+from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
 
 
 class ControlledUsdaSearch:
@@ -124,6 +125,89 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, 422)
             self.assertEqual(usda_search.queries, ["egg", "unknown"])
             self.assertEqual(events, [])
+
+    def test_history_shows_calendar_week_events_and_totals_without_usda(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            today = date.today()
+            monday = today - timedelta(days=today.weekday())
+            events = [
+                ConsumptionEvent(
+                    event_id="monday-event",
+                    revision=1,
+                    day=monday,
+                    usda_food_id="1",
+                    food_description="Monday snack",
+                    quantity_value=1,
+                    quantity_measure="serving",
+                    nutrition=NutritionSnapshot(120.4, 3.25, 7.26, 1.24),
+                ),
+                ConsumptionEvent(
+                    event_id="sunday-event",
+                    revision=1,
+                    day=monday + timedelta(days=6),
+                    usda_food_id="2",
+                    food_description="Sunday snack",
+                    quantity_value=2,
+                    quantity_measure="eggs",
+                    nutrition=NutritionSnapshot(79.6, 2.24, 1.25, 3.26),
+                ),
+                ConsumptionEvent(
+                    event_id="previous-event",
+                    revision=1,
+                    day=monday - timedelta(days=1),
+                    usda_food_id="3",
+                    food_description="Previous snack",
+                    quantity_value=1,
+                    quantity_measure="cup",
+                    nutrition=NutritionSnapshot(999, 99, 99, 99),
+                ),
+            ]
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                for event in events:
+                    storage.create_consumption_event(event)
+
+            application = create_application(settings)
+            with make_server("127.0.0.1", 0, application) as server:
+                thread = Thread(target=server.handle_request)
+                thread.start()
+                try:
+                    with urlopen(
+                        f"http://127.0.0.1:{server.server_port}/?week={monday.isoformat()}",
+                        timeout=2,
+                    ) as response:
+                        body = response.read().decode("utf-8")
+                finally:
+                    thread.join(timeout=2)
+
+            self.assertEqual(response.status, 200)
+            self.assertIn("Monday snack", body)
+            self.assertIn("Sunday snack", body)
+            self.assertNotIn("Previous snack", body)
+            self.assertIn("Calories</dt><dd>200</dd>", body)
+            self.assertIn("Protein</dt><dd>5.5 g</dd>", body)
+            self.assertIn("Carbohydrates</dt><dd>8.5 g</dd>", body)
+            self.assertIn("Fat</dt><dd>4.5 g</dd>", body)
+            self.assertIn(f"week={monday - timedelta(days=7):%Y-%m-%d}", body)
+            self.assertNotIn(f"week={monday + timedelta(days=7):%Y-%m-%d}", body)
+
+            future_body = b"".join(
+                application(
+                    {
+                        "PATH_INFO": "/",
+                        "REQUEST_METHOD": "GET",
+                        "QUERY_STRING": f"week={monday + timedelta(days=7):%Y-%m-%d}",
+                    },
+                    lambda status, headers: None,
+                )
+            ).decode("utf-8")
+            self.assertIn("Monday snack", future_body)
+            self.assertNotIn("Previous snack", future_body)
 
     def test_invalid_quantity_shows_an_error_and_creates_no_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
