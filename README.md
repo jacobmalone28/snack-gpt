@@ -29,6 +29,13 @@ python3 -m snack_gpt serve
 
 Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available at <http://127.0.0.1:8000/health>.
 
+## Back up history
+
+The local web interface can download all Consumption Events as a versioned JSON
+file and import that file without USDA access. Re-importing unchanged events
+skips them. If a stable event ID already exists with different data, the import
+reports the conflict and preserves the local Consumption Event.
+
 ## Configuration
 
 | Environment variable | Default | Purpose |

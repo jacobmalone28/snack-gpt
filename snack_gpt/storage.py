@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 import sqlite3
 from types import TracebackType
-from typing import Self
+from typing import Self, Sequence
 
 
 @dataclass(frozen=True)
@@ -82,8 +82,11 @@ class Storage:
             )
 
     def create_consumption_event(self, event: ConsumptionEvent) -> None:
+        self.create_consumption_events([event])
+
+    def create_consumption_events(self, events: Sequence[ConsumptionEvent]) -> None:
         with self._connection:
-            self._connection.execute(
+            self._connection.executemany(
                 """
                 INSERT INTO consumption_events (
                     event_id, revision, day, usda_food_id, food_description,
@@ -91,19 +94,22 @@ class Storage:
                     carbohydrates, fat
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    event.event_id,
-                    event.revision,
-                    event.day.isoformat(),
-                    event.usda_food_id,
-                    event.food_description,
-                    event.quantity_value,
-                    event.quantity_measure,
-                    event.nutrition.calories,
-                    event.nutrition.protein,
-                    event.nutrition.carbohydrates,
-                    event.nutrition.fat,
-                ),
+                [
+                    (
+                        event.event_id,
+                        event.revision,
+                        event.day.isoformat(),
+                        event.usda_food_id,
+                        event.food_description,
+                        event.quantity_value,
+                        event.quantity_measure,
+                        event.nutrition.calories,
+                        event.nutrition.protein,
+                        event.nutrition.carbohydrates,
+                        event.nutrition.fat,
+                    )
+                    for event in events
+                ],
             )
 
     def list_consumption_events(self) -> list[ConsumptionEvent]:
