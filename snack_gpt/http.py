@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterable
-from datetime import date
+from datetime import date, timedelta
 from html import escape
 import json
 from typing import BinaryIO, TypeAlias, cast
@@ -8,7 +8,7 @@ from urllib.parse import parse_qs
 from snack_gpt.config import Settings
 from snack_gpt.history_transfer import HistoryImportError, export_history, import_history
 from snack_gpt.ingestion import IngestionError, UsdaSearch, create_consumption_event
-from snack_gpt.storage import Storage
+from snack_gpt.storage import ConsumptionEvent, Storage
 from snack_gpt.usda import FoodDataCentralSearch
 
 
@@ -106,6 +106,15 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
 
         with Storage(settings.database_path) as storage:
             health = storage.health()
+            current_week = _calendar_week_start(date.today())
+            requested_week = _query_value(environment, "week")
+            selected_week = _calendar_week_start(_parse_date(requested_week, date.today()))
+            selected_week = min(selected_week, current_week)
+            events = [
+                event
+                for event in storage.list_consumption_events()
+                if selected_week <= event.day <= selected_week + timedelta(days=6)
+            ]
 
         storage_status = "Storage healthy" if health.writable else "Storage read-only"
         if path == "/health":
@@ -126,6 +135,24 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
             )
             return [body]
 
+        totals = _nutrition_totals(events)
+        previous_week = selected_week - timedelta(days=7)
+        next_week = selected_week + timedelta(days=7)
+        previous_link = f'<a href="/?week={previous_week.isoformat()}">Previous week</a>'
+        next_link = (
+            f'<a href="/?week={next_week.isoformat()}">Next week</a>'
+            if next_week <= current_week
+            else ""
+        )
+        current_link = (
+            '<a href="/">Current week</a>'
+            if selected_week < current_week
+            else ""
+        )
+        days = "".join(
+            _render_day(selected_week + timedelta(days=offset), events)
+            for offset in range(7)
+        )
         home_page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -145,9 +172,13 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
     label:first-child, label:last-of-type, button {{ grid-column: 1 / -1; }}
     input {{ box-sizing: border-box; width: 100%; padding: 0.7rem; border: 1px solid #767268; background: #fff; font: inherit; }}
     button {{ padding: 0.8rem; border: 0; background: #18211b; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }}
+    nav {{ display: flex; justify-content: space-between; gap: 1rem; margin-top: 2rem; }}
+    nav a {{ color: #a33a22; font-weight: 700; }}
     section {{ margin-top: 2rem; border-block: 1px solid #a8a396; padding: 1.25rem 0; }}
     section div {{ display: flex; align-items: end; gap: 1rem; flex-wrap: wrap; }}
     section a {{ color: #a33a22; font-weight: 700; }}
+    section h2 {{ margin-bottom: 0.5rem; }}
+    ul {{ padding-left: 1.25rem; }}
     @media (max-width: 32rem) {{ form {{ grid-template-columns: 1fr; }} label, label:first-child, label:last-of-type, button {{ grid-column: 1; }} }}
   </style>
 </head>
@@ -159,6 +190,18 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
       <dt>Storage</dt><dd>{escape(storage_status)}</dd>
       <dt>Database</dt><dd>Schema {health.schema_version}</dd>
     </dl>
+        <section>
+            <h2>Calendar Week: {_date_label(selected_week)} - {_date_label(selected_week + timedelta(days=6))}</h2>
+            <nav>{previous_link}{current_link}{next_link}</nav>
+            {days}
+            <h2>Weekly Nutrition Totals</h2>
+            <dl>
+                <dt>Calories</dt><dd>{totals[0]:.0f}</dd>
+                <dt>Protein</dt><dd>{totals[1]:.1f} g</dd>
+                <dt>Carbohydrates</dt><dd>{totals[2]:.1f} g</dd>
+                <dt>Fat</dt><dd>{totals[3]:.1f} g</dd>
+            </dl>
+        </section>
         <section>
             <h2>History backup</h2>
             <div>
@@ -245,3 +288,47 @@ def _request_body(environment: dict[str, object]) -> bytes:
 
 def _form_value(form: dict[str, list[str]], name: str) -> str:
     return form.get(name, [""])[0]
+
+
+def _query_value(environment: dict[str, object], name: str) -> str:
+    query_string = str(environment.get("QUERY_STRING", ""))
+    return parse_qs(query_string, keep_blank_values=True).get(name, [""])[0]
+
+
+def _parse_date(value: str, fallback: date) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return fallback
+
+
+def _calendar_week_start(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def _nutrition_totals(events: list[ConsumptionEvent]) -> tuple[float, float, float, float]:
+    calories = protein = carbohydrates = fat = 0.0
+    for event in events:
+        nutrition = event.nutrition
+        calories += nutrition.calories
+        protein += nutrition.protein
+        carbohydrates += nutrition.carbohydrates
+        fat += nutrition.fat
+    return calories, protein, carbohydrates, fat
+
+
+def _render_day(day: date, events: list[ConsumptionEvent]) -> str:
+    day_events = [event for event in events if event.day == day]
+    event_markup = "".join(
+        f"<li>{escape(event.food_description)}: {event.quantity_value:g} "
+        f"{escape(event.quantity_measure)}</li>"
+        for event in day_events
+    )
+    return (
+        f"<h3>{_date_label(day)}</h3>"
+        f"<ul>{event_markup or '<li>No Consumption Events</li>'}</ul>"
+    )
+
+
+def _date_label(day: date) -> str:
+    return day.strftime("%A, %b %d, %Y").replace(" 0", " ")
