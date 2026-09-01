@@ -36,6 +36,71 @@ class ControlledUsdaSearch:
 
 
 class HttpTests(unittest.TestCase):
+    def test_owner_can_export_and_import_history_without_usda(self) -> None:
+        event = ConsumptionEvent(
+            event_id="stable-event-id",
+            revision=2,
+            day=date(2026, 8, 25),
+            usda_food_id="171287",
+            food_description="Egg, whole, raw, fresh",
+            quantity_value=2.0,
+            quantity_measure="large",
+            nutrition=NutritionSnapshot(143.0, 12.6, 0.72, 9.51),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source_settings = Settings(
+                database_path=Path(directory) / "source.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            with Storage(source_settings.database_path) as storage:
+                storage.initialize()
+                storage.create_consumption_event(event)
+            source_application = create_application(source_settings)
+
+            with make_server("127.0.0.1", 0, source_application) as server:
+                thread = Thread(target=server.handle_request)
+                thread.start()
+                try:
+                    with urlopen(
+                        f"http://127.0.0.1:{server.server_port}/consumption-events/export",
+                        timeout=2,
+                    ) as response:
+                        document = response.read()
+                        content_disposition = response.headers["Content-Disposition"]
+                finally:
+                    thread.join(timeout=2)
+
+            destination_settings = Settings(
+                database_path=Path(directory) / "destination.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            destination_application = create_application(destination_settings)
+            with make_server("127.0.0.1", 0, destination_application) as server:
+                thread = Thread(target=server.handle_request)
+                thread.start()
+                try:
+                    request = Request(
+                        f"http://127.0.0.1:{server.server_port}/consumption-events/import",
+                        data=document,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urlopen(request, timeout=2) as import_response:
+                        result = json.load(import_response)
+                finally:
+                    thread.join(timeout=2)
+
+            with Storage(destination_settings.database_path) as storage:
+                imported_events = storage.list_consumption_events()
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(content_disposition, 'attachment; filename="snack-gpt-history.json"')
+        self.assertEqual(import_response.status, 200)
+        self.assertEqual(result, {"imported": 1, "skipped": 0, "conflicts": []})
+        self.assertEqual(imported_events, [event])
+
     def test_history_shows_calendar_week_events_and_totals_without_usda(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings = Settings(
@@ -228,6 +293,9 @@ class HttpTests(unittest.TestCase):
             self.assertIn('name="quantity"', body)
             self.assertIn('name="measure"', body)
             self.assertIn('name="day"', body)
+            self.assertIn('href="/consumption-events/export"', body)
+            self.assertIn('id="history-import-file"', body)
+            self.assertIn('id="import-history"', body)
 
     def test_health_endpoint_reports_application_and_storage_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
