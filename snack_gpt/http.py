@@ -6,6 +6,7 @@ from typing import BinaryIO, TypeAlias, cast
 from urllib.parse import parse_qs
 
 from snack_gpt.config import Settings
+from snack_gpt.history_transfer import HistoryImportError, export_history, import_history
 from snack_gpt.ingestion import (
     ConsumptionReportItem,
     IngestionError,
@@ -33,6 +34,46 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
     ) -> Iterable[bytes]:
         path = str(environment.get("PATH_INFO", "/"))
         method = str(environment.get("REQUEST_METHOD", "GET"))
+        if path == "/consumption-events/export" and method == "GET":
+            with Storage(settings.database_path) as storage:
+                document = export_history(storage)
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", "application/json; charset=utf-8"),
+                    ("Content-Length", str(len(document))),
+                    (
+                        "Content-Disposition",
+                        'attachment; filename="snack-gpt-history.json"',
+                    ),
+                ],
+            )
+            return [document]
+
+        if path == "/consumption-events/import" and method == "POST":
+            content_type = str(environment.get("CONTENT_TYPE", "")).partition(";")[0]
+            if content_type != "application/json":
+                return _plain_response(
+                    start_response,
+                    "415 Unsupported Media Type",
+                    "History import must be JSON.\n",
+                )
+            try:
+                with Storage(settings.database_path) as storage:
+                    result = import_history(storage, _request_body(environment))
+            except HistoryImportError as error:
+                return _plain_response(
+                    start_response, "422 Unprocessable Entity", f"{error}\n"
+                )
+            return _json_response(
+                start_response,
+                {
+                    "imported": result.imported_count,
+                    "skipped": result.skipped_count,
+                    "conflicts": list(result.conflict_ids),
+                },
+            )
+
         if path == "/consumption-events" and method == "POST":
             if configured_usda_search is None:
                 return _plain_response(
@@ -40,9 +81,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                     "503 Service Unavailable",
                     "USDA food search is not configured.\n",
                 )
-            content_length = int(str(environment.get("CONTENT_LENGTH", "0") or "0"))
-            request_stream = cast(BinaryIO, environment["wsgi.input"])
-            request_body = request_stream.read(content_length)
+            request_body = _request_body(environment)
             form = parse_qs(request_body.decode("utf-8"), keep_blank_values=True)
             try:
                 items = _report_items(form)
@@ -146,7 +185,9 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
     .secondary {{ justify-self: start; background: transparent; color: #18211b; border: 1px solid #767268; }}
     nav {{ display: flex; justify-content: space-between; gap: 1rem; margin-top: 2rem; }}
     nav a {{ color: #a33a22; font-weight: 700; }}
-    section {{ margin-top: 2rem; }}
+    section {{ margin-top: 2rem; border-block: 1px solid #a8a396; padding: 1.25rem 0; }}
+    section div {{ display: flex; align-items: end; gap: 1rem; flex-wrap: wrap; }}
+    section a {{ color: #a33a22; font-weight: 700; }}
     section h2 {{ margin-bottom: 0.5rem; }}
     ul {{ padding-left: 1.25rem; }}
     @media (max-width: 32rem) {{ .report-item {{ grid-template-columns: 1fr; }} }}
@@ -171,6 +212,15 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                 <dt>Carbohydrates</dt><dd>{totals[2]:.1f} g</dd>
                 <dt>Fat</dt><dd>{totals[3]:.1f} g</dd>
             </dl>
+        </section>
+        <section>
+            <h2>History backup</h2>
+            <div>
+                <a href="/consumption-events/export" download>Export history</a>
+                <label>Import history <input id="history-import-file" type="file" accept="application/json,.json"></label>
+                <button id="import-history" type="button">Import</button>
+            </div>
+            <p id="history-import-status" role="status"></p>
         </section>
         <form action="/consumption-events" method="post">
             <fieldset>
@@ -206,6 +256,28 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                     event.target.closest(".report-item").remove();
                 }}
             }});
+            document.querySelector("#import-history").addEventListener("click", async () => {{
+                const file = document.querySelector("#history-import-file").files[0];
+                const status = document.querySelector("#history-import-status");
+                if (!file) {{
+                    status.textContent = "Choose a history JSON file.";
+                    return;
+                }}
+                const response = await fetch("/consumption-events/import", {{
+                    method: "POST",
+                    headers: {{"Content-Type": "application/json"}},
+                    body: await file.text(),
+                }});
+                if (!response.ok) {{
+                    status.textContent = await response.text();
+                    return;
+                }}
+                const result = await response.json();
+                const conflicts = result.conflicts.length
+                    ? ` Conflicts: ${{result.conflicts.join(", ")}}.`
+                    : "";
+                status.textContent = `Imported ${{result.imported}}; skipped ${{result.skipped}}.${{conflicts}}`;
+            }});
         </script>
   </main>
 </body>
@@ -232,6 +304,23 @@ def _plain_response(
         [("Content-Type", "text/plain; charset=utf-8"), ("Content-Length", str(len(body)))],
     )
     return [body]
+
+
+def _json_response(
+    start_response: StartResponse, payload: dict[str, object]
+) -> Iterable[bytes]:
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    start_response(
+        "200 OK",
+        [("Content-Type", "application/json"), ("Content-Length", str(len(body)))],
+    )
+    return [body]
+
+
+def _request_body(environment: dict[str, object]) -> bytes:
+    content_length = int(str(environment.get("CONTENT_LENGTH", "0") or "0"))
+    request_stream = cast(BinaryIO, environment["wsgi.input"])
+    return request_stream.read(content_length)
 
 
 def _form_value(form: dict[str, list[str]], name: str) -> str:
