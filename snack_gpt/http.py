@@ -6,7 +6,12 @@ from typing import BinaryIO, TypeAlias, cast
 from urllib.parse import parse_qs
 
 from snack_gpt.config import Settings
-from snack_gpt.ingestion import IngestionError, UsdaSearch, create_consumption_event
+from snack_gpt.ingestion import (
+    ConsumptionReportItem,
+    IngestionError,
+    UsdaSearch,
+    create_consumption_report,
+)
 from snack_gpt.storage import Storage
 from snack_gpt.usda import FoodDataCentralSearch
 
@@ -40,21 +45,24 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
             request_body = request_stream.read(content_length)
             form = parse_qs(request_body.decode("utf-8"), keep_blank_values=True)
             try:
+                items = _report_items(form)
                 with Storage(settings.database_path) as storage:
-                    event = create_consumption_event(
+                    events = create_consumption_report(
                         storage,
                         configured_usda_search,
-                        food=_form_value(form, "food"),
-                        quantity=_form_value(form, "quantity"),
-                        measure=_form_value(form, "measure"),
+                        items=items,
                         day=_form_value(form, "day"),
                     )
             except IngestionError as error:
                 return _plain_response(start_response, "422 Unprocessable Entity", f"{error}\n")
+            if len(events) == 1:
+                message = f"Created Consumption Event for {events[0].food_description}.\n"
+            else:
+                message = f"Created {len(events)} Consumption Events.\n"
             return _plain_response(
                 start_response,
                 "201 Created",
-                f"Created Consumption Event for {event.food_description}.\n",
+                message,
             )
 
         if path not in {"/", "/health"}:
@@ -101,12 +109,15 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
     dl {{ display: grid; grid-template-columns: 1fr auto; gap: 0.75rem 2rem; border-block: 1px solid #a8a396; padding: 1.25rem 0; }}
     dt {{ font-weight: 700; }} dd {{ margin: 0; }}
     .ready {{ color: #17653a; }}
-    form {{ display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 1rem; margin-top: 2rem; }}
+    form {{ display: grid; gap: 1rem; margin-top: 2rem; }}
+    fieldset {{ border: 0; margin: 0; padding: 0; }}
+    legend {{ font-size: 1.25rem; font-weight: 700; margin-bottom: 1rem; }}
+    .report-item {{ display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 1rem; margin-bottom: 1rem; align-items: end; }}
     label {{ display: grid; gap: 0.4rem; font-weight: 700; }}
-    label:first-child, label:last-of-type, button {{ grid-column: 1 / -1; }}
     input {{ box-sizing: border-box; width: 100%; padding: 0.7rem; border: 1px solid #767268; background: #fff; font: inherit; }}
     button {{ padding: 0.8rem; border: 0; background: #18211b; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }}
-    @media (max-width: 32rem) {{ form {{ grid-template-columns: 1fr; }} label, label:first-child, label:last-of-type, button {{ grid-column: 1; }} }}
+    .secondary {{ justify-self: start; background: transparent; color: #18211b; border: 1px solid #767268; }}
+    @media (max-width: 32rem) {{ .report-item {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
 <body>
@@ -118,12 +129,40 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
       <dt>Database</dt><dd>Schema {health.schema_version}</dd>
     </dl>
         <form action="/consumption-events" method="post">
-            <label>Food <input name="food" type="search" required></label>
-            <label>Quantity <input name="quantity" type="number" min="0.01" step="any" required></label>
-            <label>Measure <input name="measure" value="grams" required></label>
+            <fieldset>
+                <legend>Consumption Report</legend>
+                <div id="report-items">
+                    <div class="report-item">
+                        <label>Food <input name="food" type="search" required></label>
+                        <label>Quantity <input name="quantity" type="number" min="0.01" step="any" required></label>
+                        <label>Measure <input name="measure" value="grams" required></label>
+                    </div>
+                </div>
+                <button class="secondary" id="add-food" type="button">Add food</button>
+            </fieldset>
             <label>Day <input name="day" type="date" value="{date.today().isoformat()}" max="{date.today().isoformat()}" required></label>
-            <button type="submit">Create Consumption Event</button>
+            <button type="submit">Create Consumption Report</button>
         </form>
+        <template id="report-item-template">
+            <div class="report-item">
+                <label>Food <input name="food" type="search" required></label>
+                <label>Quantity <input name="quantity" type="number" min="0.01" step="any" required></label>
+                <label>Measure <input name="measure" value="grams" required></label>
+                <button class="secondary remove-food" type="button">Remove</button>
+            </div>
+        </template>
+        <script>
+            const reportItems = document.querySelector("#report-items");
+            const itemTemplate = document.querySelector("#report-item-template");
+            document.querySelector("#add-food").addEventListener("click", () => {{
+                reportItems.append(itemTemplate.content.cloneNode(true));
+            }});
+            reportItems.addEventListener("click", (event) => {{
+                if (event.target instanceof Element && event.target.matches(".remove-food")) {{
+                    event.target.closest(".report-item").remove();
+                }}
+            }});
+        </script>
   </main>
 </body>
 </html>
@@ -153,3 +192,15 @@ def _plain_response(
 
 def _form_value(form: dict[str, list[str]], name: str) -> str:
     return form.get(name, [""])[0]
+
+
+def _report_items(form: dict[str, list[str]]) -> list[ConsumptionReportItem]:
+    foods = form.get("food", [])
+    quantities = form.get("quantity", [])
+    measures = form.get("measure", [])
+    if not foods or len(foods) != len(quantities) or len(foods) != len(measures):
+        raise IngestionError("Each food needs one quantity and measure.")
+    return [
+        ConsumptionReportItem(food, quantity, measure)
+        for food, quantity, measure in zip(foods, quantities, measures, strict=True)
+    ]

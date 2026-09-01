@@ -20,6 +20,13 @@ class FoodSearchResult:
     measures: Mapping[str, float]
 
 
+@dataclass(frozen=True)
+class ConsumptionReportItem:
+    food: str
+    quantity: str
+    measure: str
+
+
 class UsdaSearch(Protocol):
     def search(self, query: str) -> Sequence[FoodSearchResult]: ...
 
@@ -60,6 +67,48 @@ def create_consumption_event(
     measure: str,
     day: str,
 ) -> ConsumptionEvent:
+    return create_consumption_report(
+        storage,
+        usda_search,
+        items=[ConsumptionReportItem(food, quantity, measure)],
+        day=day,
+    )[0]
+
+
+def create_consumption_report(
+    storage: Storage,
+    usda_search: UsdaSearch,
+    *,
+    items: Sequence[ConsumptionReportItem],
+    day: str,
+) -> list[ConsumptionEvent]:
+    if not items:
+        raise IngestionError("Enter at least one food and Food Quantity.")
+
+    try:
+        event_day = date.fromisoformat(day)
+    except ValueError as error:
+        raise IngestionError("Choose a valid calendar day.") from error
+    if event_day > date.today():
+        raise IngestionError("Consumption Events cannot be created for a future day.")
+
+    events = [
+        _build_consumption_event(usda_search, item=item, event_day=event_day)
+        for item in items
+    ]
+    storage.create_consumption_events(events)
+    return events
+
+
+def _build_consumption_event(
+    usda_search: UsdaSearch,
+    *,
+    item: ConsumptionReportItem,
+    event_day: date,
+) -> ConsumptionEvent:
+    food = item.food
+    quantity = item.quantity
+    measure = item.measure
     query = food.strip()
     if not query:
         raise IngestionError("Enter a food to search for.")
@@ -74,12 +123,6 @@ def create_consumption_event(
     normalized_measure = measure.strip().lower()
     if not normalized_measure:
         raise IngestionError("Enter a Food Quantity measure.")
-    try:
-        event_day = date.fromisoformat(day)
-    except ValueError as error:
-        raise IngestionError("Choose a valid calendar day.") from error
-    if event_day > date.today():
-        raise IngestionError("Consumption Events cannot be created for a future day.")
 
     complete_result = next(
         (
@@ -107,7 +150,7 @@ def create_consumption_event(
 
     scale = grams / 100.0
     nutrients = complete_result.nutrients_per_100_grams
-    event = ConsumptionEvent(
+    return ConsumptionEvent(
         event_id=str(uuid4()),
         revision=1,
         day=event_day,
@@ -122,5 +165,3 @@ def create_consumption_event(
             fat=nutrients["fat"] * scale,
         ),
     )
-    storage.create_consumption_event(event)
-    return event

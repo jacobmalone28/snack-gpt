@@ -3,9 +3,11 @@ import tempfile
 import unittest
 
 from snack_gpt.ingestion import (
+    ConsumptionReportItem,
     FoodSearchResult,
     IngestionError,
     create_consumption_event,
+    create_consumption_report,
 )
 from snack_gpt.storage import Storage
 
@@ -51,6 +53,24 @@ class ControlledUsdaSearch:
 
 
 class IngestionTests(unittest.TestCase):
+    def test_consumption_report_is_not_stored_when_any_item_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+
+                with self.assertRaisesRegex(IngestionError, "not recognized"):
+                    create_consumption_report(
+                        storage,
+                        ControlledUsdaSearch([COMPLETE_RESULT]),
+                        items=[
+                            ConsumptionReportItem("egg", "1", "large"),
+                            ConsumptionReportItem("egg", "1", "bucket"),
+                        ],
+                        day="2026-08-25",
+                    )
+
+                self.assertEqual(storage.list_consumption_events(), [])
+
     def test_preserves_food_qualifiers_and_normalizes_plural_measure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with Storage(Path(directory) / "events.sqlite3") as storage:

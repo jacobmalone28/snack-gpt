@@ -1,11 +1,33 @@
+from datetime import date
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
-from snack_gpt.storage import Storage
+from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
 
 
 class StorageTests(unittest.TestCase):
+    def test_consumption_report_rolls_back_when_any_insert_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "snack-gpt.sqlite3") as storage:
+                storage.initialize()
+                event = ConsumptionEvent(
+                    event_id="duplicate-id",
+                    revision=1,
+                    day=date(2026, 8, 25),
+                    usda_food_id="171287",
+                    food_description="Egg, whole, raw, fresh",
+                    quantity_value=1,
+                    quantity_measure="large",
+                    nutrition=NutritionSnapshot(71.5, 6.3, 0.36, 4.755),
+                )
+
+                with self.assertRaises(sqlite3.IntegrityError):
+                    storage.create_consumption_events([event, event])
+
+                self.assertEqual(storage.list_consumption_events(), [])
+
     def test_initialization_survives_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "snack-gpt.sqlite3"
