@@ -8,9 +8,11 @@ from urllib.parse import parse_qs
 from snack_gpt.config import Settings
 from snack_gpt.history_transfer import HistoryImportError, export_history, import_history
 from snack_gpt.ingestion import (
+    ConsumptionEventConflict,
     ConsumptionReportItem,
     IngestionError,
     UsdaSearch,
+    correct_consumption_event,
     create_consumption_report,
 )
 from snack_gpt.storage import ConsumptionEvent, Storage
@@ -72,6 +74,50 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                     "skipped": result.skipped_count,
                     "conflicts": list(result.conflict_ids),
                 },
+            )
+
+        if path in {"/consumption-events/correct", "/consumption-events/delete"} and method == "POST":
+            form = parse_qs(
+                _request_body(environment).decode("utf-8"), keep_blank_values=True
+            )
+            event_id = _form_value(form, "event_id")
+            try:
+                expected_revision = _form_revision(form)
+                with Storage(settings.database_path) as storage:
+                    if path == "/consumption-events/correct":
+                        event = correct_consumption_event(
+                            storage,
+                            configured_usda_search,
+                            event_id=event_id,
+                            expected_revision=expected_revision,
+                            food=_form_value(form, "food"),
+                            quantity=_form_value(form, "quantity"),
+                            measure=_form_value(form, "measure"),
+                            day=_form_value(form, "day"),
+                        )
+                    else:
+                        if _form_value(form, "confirmed") != "yes":
+                            raise IngestionError("Confirm deletion before removing the event.")
+                        if not storage.delete_consumption_event(
+                            event_id, expected_revision
+                        ):
+                            raise ConsumptionEventConflict(
+                                "Consumption Event changed; refresh and try again."
+                            )
+            except ConsumptionEventConflict as error:
+                return _plain_response(start_response, "409 Conflict", f"{error}\n")
+            except IngestionError as error:
+                return _plain_response(
+                    start_response, "422 Unprocessable Entity", f"{error}\n"
+                )
+            if path == "/consumption-events/correct":
+                return _plain_response(
+                    start_response,
+                    "200 OK",
+                    f"Corrected Consumption Event for {event.food_description}.\n",
+                )
+            return _plain_response(
+                start_response, "200 OK", "Removed Consumption Event.\n"
             )
 
         if path == "/consumption-events" and method == "POST":
@@ -179,6 +225,10 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
     fieldset {{ border: 0; margin: 0; padding: 0; }}
     legend {{ font-size: 1.25rem; font-weight: 700; margin-bottom: 1rem; }}
     .report-item {{ display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 1rem; margin-bottom: 1rem; align-items: end; }}
+    .event {{ margin-bottom: 1.5rem; }}
+    .event-edit {{ display: grid; grid-template-columns: 2fr 1fr 1fr 1.3fr auto; gap: 0.5rem; margin-top: 0.5rem; align-items: end; }}
+    .event-delete {{ display: block; margin-top: 0.5rem; }}
+    .event-edit button, .event-delete button {{ padding: 0.7rem; }}
     label {{ display: grid; gap: 0.4rem; font-weight: 700; }}
     input {{ box-sizing: border-box; width: 100%; padding: 0.7rem; border: 1px solid #767268; background: #fff; font: inherit; }}
     button {{ padding: 0.8rem; border: 0; background: #18211b; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }}
@@ -190,7 +240,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
     section a {{ color: #a33a22; font-weight: 700; }}
     section h2 {{ margin-bottom: 0.5rem; }}
     ul {{ padding-left: 1.25rem; }}
-    @media (max-width: 32rem) {{ .report-item {{ grid-template-columns: 1fr; }} }}
+    @media (max-width: 32rem) {{ .report-item, .event-edit {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
 <body>
@@ -327,6 +377,16 @@ def _form_value(form: dict[str, list[str]], name: str) -> str:
     return form.get(name, [""])[0]
 
 
+def _form_revision(form: dict[str, list[str]]) -> int:
+    try:
+        revision = int(_form_value(form, "revision"))
+    except ValueError as error:
+        raise IngestionError("Consumption Event revision is invalid.") from error
+    if revision < 1:
+        raise IngestionError("Consumption Event revision is invalid.")
+    return revision
+
+
 def _report_items(form: dict[str, list[str]]) -> list[ConsumptionReportItem]:
     foods = form.get("food", [])
     quantities = form.get("quantity", [])
@@ -369,8 +429,22 @@ def _nutrition_totals(events: list[ConsumptionEvent]) -> tuple[float, float, flo
 def _render_day(day: date, events: list[ConsumptionEvent]) -> str:
     day_events = [event for event in events if event.day == day]
     event_markup = "".join(
-        f"<li>{escape(event.food_description)}: {event.quantity_value:g} "
-        f"{escape(event.quantity_measure)}</li>"
+        f'<li class="event"><strong>{escape(event.food_description)}</strong>: '
+        f"{event.quantity_value:g} {escape(event.quantity_measure)}"
+        f'<form class="event-edit" action="/consumption-events/correct" method="post">'
+        f'<input name="event_id" type="hidden" value="{escape(event.event_id)}">'
+        f'<input name="revision" type="hidden" value="{event.revision}">'
+        f'<label>Food <input name="food" type="search" value="{escape(event.food_description)}" required></label>'
+        f'<label>Quantity <input name="quantity" type="number" min="0.01" step="any" value="{event.quantity_value:g}" required></label>'
+        f'<label>Measure <input name="measure" value="{escape(event.quantity_measure)}" required></label>'
+        f'<label>Day <input name="day" type="date" value="{event.day.isoformat()}" max="{date.today().isoformat()}" required></label>'
+        f'<button type="submit">Save</button></form>'
+        f'<form class="event-delete" action="/consumption-events/delete" method="post" '
+        f'onsubmit="return confirm(\'Remove this Consumption Event?\')">'
+        f'<input name="event_id" type="hidden" value="{escape(event.event_id)}">'
+        f'<input name="revision" type="hidden" value="{event.revision}">'
+        f'<input name="confirmed" type="hidden" value="yes">'
+        f'<button type="submit">Delete</button></form></li>'
         for event in day_events
     )
     return (

@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 import math
 from typing import Protocol
@@ -10,6 +10,10 @@ from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
 
 class IngestionError(ValueError):
     """Raised when a Consumption Event cannot be validated and created."""
+
+
+class ConsumptionEventConflict(IngestionError):
+    """Raised when a Consumption Event mutation uses a stale revision."""
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,70 @@ def create_consumption_report(
     ]
     storage.create_consumption_events(events)
     return events
+
+
+def correct_consumption_event(
+    storage: Storage,
+    usda_search: UsdaSearch | None,
+    *,
+    event_id: str,
+    expected_revision: int,
+    food: str,
+    quantity: str,
+    measure: str,
+    day: str,
+) -> ConsumptionEvent:
+    existing = storage.get_consumption_event(event_id)
+    if existing is None:
+        raise IngestionError("Consumption Event was not found.")
+    if existing.revision != expected_revision:
+        raise ConsumptionEventConflict(
+            "Consumption Event changed; refresh and try again."
+        )
+
+    try:
+        event_day = date.fromisoformat(day)
+    except ValueError as error:
+        raise IngestionError("Choose a valid calendar day.") from error
+    if event_day > date.today():
+        raise IngestionError("Consumption Events cannot be corrected to a future day.")
+
+    query = food.strip()
+    try:
+        quantity_value = float(quantity)
+    except ValueError as error:
+        raise IngestionError("Food quantity must be a number greater than zero.") from error
+    normalized_measure = measure.strip().lower()
+    food_quantity_changed = (
+        query != existing.food_description
+        or quantity_value != existing.quantity_value
+        or normalized_measure != existing.quantity_measure
+    )
+    if food_quantity_changed:
+        if usda_search is None:
+            raise IngestionError("USDA food search is not configured.")
+        candidate = _build_consumption_event(
+            usda_search,
+            item=ConsumptionReportItem(food, quantity, measure),
+            event_day=event_day,
+        )
+        corrected = replace(
+            candidate,
+            event_id=existing.event_id,
+            revision=existing.revision + 1,
+        )
+    else:
+        corrected = replace(
+            existing,
+            revision=existing.revision + 1,
+            day=event_day,
+        )
+
+    if not storage.update_consumption_event(corrected, expected_revision):
+        raise ConsumptionEventConflict(
+            "Consumption Event changed; refresh and try again."
+        )
+    return corrected
 
 
 def _build_consumption_event(
