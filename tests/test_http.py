@@ -17,7 +17,11 @@ from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
 
 
 class ControlledUsdaSearch:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
     def search(self, query: str) -> list[FoodSearchResult]:
+        self.queries.append(query)
         if query != "egg":
             return []
         return [
@@ -36,6 +40,92 @@ class ControlledUsdaSearch:
 
 
 class HttpTests(unittest.TestCase):
+    def test_owner_can_create_repeated_consumption_events_in_one_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            usda_search = ControlledUsdaSearch()
+            application = create_application(settings, usda_search)
+            form = urlencode(
+                [
+                    ("food", "egg"),
+                    ("food", "egg"),
+                    ("quantity", "1"),
+                    ("quantity", "2"),
+                    ("measure", "large"),
+                    ("measure", "large"),
+                    ("day", "2026-08-25"),
+                ]
+            ).encode()
+
+            with make_server("127.0.0.1", 0, application) as server:
+                thread = Thread(target=server.handle_request)
+                thread.start()
+                try:
+                    request = Request(
+                        f"http://127.0.0.1:{server.server_port}/consumption-events",
+                        data=form,
+                        method="POST",
+                    )
+                    with urlopen(request, timeout=2) as response:
+                        body = response.read().decode("utf-8")
+                finally:
+                    thread.join(timeout=2)
+
+            with Storage(settings.database_path) as storage:
+                events = storage.list_consumption_events()
+
+            self.assertEqual(response.status, 201)
+            self.assertIn("Created 2 Consumption Events", body)
+            self.assertEqual(usda_search.queries, ["egg", "egg"])
+            self.assertEqual([event.quantity_value for event in events], [1.0, 2.0])
+            self.assertEqual(len({event.event_id for event in events}), 2)
+
+    def test_consumption_report_stores_nothing_when_any_lookup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            usda_search = ControlledUsdaSearch()
+            application = create_application(settings, usda_search)
+            form = urlencode(
+                [
+                    ("food", "egg"),
+                    ("food", "unknown"),
+                    ("quantity", "1"),
+                    ("quantity", "1"),
+                    ("measure", "large"),
+                    ("measure", "grams"),
+                    ("day", "2026-08-25"),
+                ]
+            ).encode()
+
+            with make_server("127.0.0.1", 0, application) as server:
+                thread = Thread(target=server.handle_request)
+                thread.start()
+                try:
+                    request = Request(
+                        f"http://127.0.0.1:{server.server_port}/consumption-events",
+                        data=form,
+                        method="POST",
+                    )
+                    with self.assertRaises(HTTPError) as raised:
+                        urlopen(request, timeout=2)
+                finally:
+                    thread.join(timeout=2)
+
+            with Storage(settings.database_path) as storage:
+                events = storage.list_consumption_events()
+
+            self.assertEqual(raised.exception.code, 422)
+            self.assertEqual(usda_search.queries, ["egg", "unknown"])
+            self.assertEqual(events, [])
+
     def test_owner_can_export_and_import_history_without_usda(self) -> None:
         event = ConsumptionEvent(
             event_id="stable-event-id",
@@ -293,6 +383,9 @@ class HttpTests(unittest.TestCase):
             self.assertIn('name="quantity"', body)
             self.assertIn('name="measure"', body)
             self.assertIn('name="day"', body)
+            self.assertIn('id="add-food"', body)
+            self.assertIn('id="report-item-template"', body)
+            self.assertIn("Create Consumption Report", body)
             self.assertIn('href="/consumption-events/export"', body)
             self.assertIn('id="history-import-file"', body)
             self.assertIn('id="import-history"', body)
