@@ -1,4 +1,5 @@
 import os
+from io import StringIO
 from pathlib import Path
 import socket
 import subprocess
@@ -6,11 +7,75 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from snack_gpt.config import Settings
+from snack_gpt.__main__ import run
+from snack_gpt.auth import verify_password
+from snack_gpt.storage import Storage
+
 
 class CliTests(unittest.TestCase):
+    def test_set_password_initializes_and_resets_owner_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "snack-gpt.sqlite3"
+            environment = {"SNACK_GPT_DATABASE": str(database_path)}
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "snack_gpt.__main__.load_dotenv"
+            ), patch(
+                "snack_gpt.__main__.getpass",
+                side_effect=["first password", "first password"],
+            ):
+                first_result = run(["set-password"])
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "snack_gpt.__main__.load_dotenv"
+            ), patch(
+                "snack_gpt.__main__.getpass",
+                side_effect=["replacement password", "replacement password"],
+            ):
+                second_result = run(["set-password"])
+
+            with Storage(database_path) as storage:
+                stored_hash = storage.owner_password_hash()
+
+        self.assertEqual(first_result, 0)
+        self.assertEqual(second_result, 0)
+        self.assertIsNotNone(stored_hash)
+        assert stored_hash is not None
+        self.assertTrue(verify_password("replacement password", stored_hash))
+        self.assertFalse(verify_password("first password", stored_hash))
+
+    def test_lan_serve_without_password_reports_configuration_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "SNACK_GPT_DATABASE": str(Path(directory) / "snack-gpt.sqlite3"),
+                "SNACK_GPT_HOST": "0.0.0.0",
+            }
+            stderr = StringIO()
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "snack_gpt.__main__.load_dotenv"
+            ), patch("sys.stderr", stderr):
+                result = run(["serve"])
+
+        self.assertEqual(result, 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            "Configuration error: LAN access requires an owner password; run snack-gpt set-password first\n",
+        )
+
+    def test_only_loopback_bindings_bypass_authentication(self) -> None:
+        for host in ("127.0.0.1", "127.12.34.56", "::1"):
+            with self.subTest(host=host):
+                settings = Settings(Path("unused.sqlite3"), host, 8000)
+                self.assertFalse(settings.authentication_required)
+
+        for host in ("0.0.0.0", "::", "192.168.1.10", "snack-gpt.local"):
+            with self.subTest(host=host):
+                settings = Settings(Path("unused.sqlite3"), host, 8000)
+                self.assertTrue(settings.authentication_required)
+
     def test_check_loads_dotenv_without_overriding_exported_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
@@ -77,7 +142,7 @@ class CliTests(unittest.TestCase):
             )
 
             self.assertEqual(first_result.returncode, 0)
-            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 2)\n")
+            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 3)\n")
             self.assertEqual(second_result.returncode, 0)
             self.assertEqual(second_result.stdout, first_result.stdout)
             self.assertTrue(database_path.is_file())

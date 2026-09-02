@@ -80,6 +80,65 @@ class Storage:
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version) VALUES (2)"
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS owner_credentials (
+                    owner_id INTEGER PRIMARY KEY CHECK (owner_id = 1),
+                    password_hash TEXT NOT NULL
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS owner_sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    expires_at INTEGER NOT NULL
+                )
+                """
+            )
+            self._connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (3)"
+            )
+
+    def set_owner_password_hash(self, password_hash: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO owner_credentials (owner_id, password_hash) VALUES (1, ?)
+                ON CONFLICT(owner_id) DO UPDATE SET password_hash = excluded.password_hash
+                """,
+                (password_hash,),
+            )
+            self._connection.execute("DELETE FROM owner_sessions")
+
+    def owner_password_hash(self) -> str | None:
+        row = self._connection.execute(
+            "SELECT password_hash FROM owner_credentials WHERE owner_id = 1"
+        ).fetchone()
+        return str(row[0]) if row is not None else None
+
+    def create_owner_session(self, token_hash: str, expires_at: int) -> None:
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO owner_sessions (token_hash, expires_at) VALUES (?, ?)",
+                (token_hash, expires_at),
+            )
+
+    def owner_session_is_valid(self, token_hash: str, now: int) -> bool:
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM owner_sessions WHERE expires_at <= ?", (now,)
+            )
+            row = self._connection.execute(
+                "SELECT 1 FROM owner_sessions WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
+        return row is not None
+
+    def delete_owner_session(self, token_hash: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM owner_sessions WHERE token_hash = ?", (token_hash,)
+            )
 
     def create_consumption_event(self, event: ConsumptionEvent) -> None:
         self.create_consumption_events([event])
