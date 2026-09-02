@@ -7,7 +7,12 @@ import unittest
 
 from snack_gpt.ingestion import FoodSearchResult
 from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
-from snack_gpt.voice import CapturedSpeech, VoiceProcessingTimeout, create_consumption_event_from_voice
+from snack_gpt.voice import (
+    CapturedSpeech,
+    VoiceProcessingTimeout,
+    create_consumption_event_from_voice,
+    create_consumption_report_from_voice,
+)
 from snack_gpt.voice_runtime import CommandVoiceRuntime, VoiceRuntimeError, load_voice_manifest
 from snack_gpt.voice_runtime import _run_command
 
@@ -56,7 +61,7 @@ class TimingOutUsdaSearch(ControlledUsdaSearch):
 class ControlledVoiceRuntime:
     def __init__(self) -> None:
         self.calls: list[str] = []
-        self.successful_event: ConsumptionEvent | None = None
+        self.successful_events: list[ConsumptionEvent] | None = None
         self.failure_reason: str | None = None
 
     def wait_for_wake_and_capture(self) -> CapturedSpeech:
@@ -73,12 +78,15 @@ class ControlledVoiceRuntime:
         self.calls.append("extract")
         self.assert_before_deadline(deadline)
         self.assertEqual(transcript, "I ate one egg")
-        return {"foods": [{"food": "egg", "quantity": 1, "measure": "large"}]}
+        return {
+            "foods": [{"food": "egg", "quantity": 1, "measure": "large"}],
+            "confidence": 1,
+        }
 
-    def report_success(self, event: ConsumptionEvent, deadline: float) -> None:
+    def report_success(self, events: list[ConsumptionEvent], deadline: float) -> None:
         self.calls.append("success")
         self.assertEqual(deadline, 130.0)
-        self.successful_event = event
+        self.successful_events = events
 
     def report_failure(self, reason: str, deadline: float) -> None:
         self.calls.append("failure")
@@ -90,6 +98,43 @@ class ControlledVoiceRuntime:
     def assertEqual(self, first: object, second: object) -> None:
         if first != second:
             raise AssertionError(f"{first!r} != {second!r}")
+
+
+class RepeatedFoodsVoiceRuntime(ControlledVoiceRuntime):
+    def extract(self, transcript: str, deadline: float) -> object:
+        self.calls.append("extract")
+        self.assert_before_deadline(deadline)
+        return {
+            "foods": [
+                {"food": "egg", "quantity": 1, "measure": "large"},
+                {"food": "egg", "quantity": 2, "measure": "large"},
+            ],
+            "confidence": 1,
+        }
+
+
+class InvalidSecondFoodVoiceRuntime(RepeatedFoodsVoiceRuntime):
+    def extract(self, transcript: str, deadline: float) -> object:
+        extraction = super().extract(transcript, deadline)
+        assert isinstance(extraction, dict)
+        foods = extraction["foods"]
+        assert isinstance(foods, list)
+        foods[1] = {"food": "egg", "quantity": 2, "measure": "bucket"}
+        return extraction
+
+
+class LowConfidenceVoiceRuntime(ControlledVoiceRuntime):
+    def extract(self, transcript: str, deadline: float) -> object:
+        extraction = super().extract(transcript, deadline)
+        assert isinstance(extraction, dict)
+        extraction["confidence"] = 0.5
+        return extraction
+
+
+class ReplayVoiceRuntime(ControlledVoiceRuntime):
+    def wait_for_wake_and_capture(self) -> CapturedSpeech:
+        self.calls.append("capture")
+        return CapturedSpeech(b"voice audio", date(2026, 8, 25), "utterance-id")
 
 
 class CaptureTimingOutRuntime(ControlledVoiceRuntime):
@@ -120,6 +165,8 @@ class ControlledCommands:
         elif name == "speech-capture":
             assert path is not None
             self.assert_timeout(timeout, 15.0)
+            if command[2] != "1.0":
+                raise AssertionError(f"unexpected silence target: {command[2]}")
             path.write_bytes(b"report audio")
         elif name == "transcription":
             assert path is not None
@@ -127,7 +174,7 @@ class ControlledCommands:
         elif name == "extraction":
             assert path is not None
             path.write_text(
-                '{"foods":[{"food":"egg","quantity":1,"measure":"large"}]}',
+                '{"foods":[{"food":"egg","quantity":1,"measure":"large"}],"confidence":1}',
                 encoding="utf-8",
             )
         elif name == "synthesize":
@@ -150,7 +197,7 @@ class TranscriptionTimingOutCommands(ControlledCommands):
 COMMANDS = {
     "wake_capture": ["wake-capture", "{audio}"],
     "wake_detection": ["wake-detection", "{output}"],
-    "speech_capture": ["speech-capture", "{audio}"],
+    "speech_capture": ["speech-capture", "{audio}", "{silence_seconds}"],
     "transcription": ["transcription", "{output}"],
     "extraction": ["extraction", "{output}"],
     "success_sound": ["success-sound"],
@@ -161,6 +208,119 @@ COMMANDS = {
 
 
 class VoiceTests(unittest.TestCase):
+    def test_low_confidence_creates_no_report_and_gives_audible_feedback(self) -> None:
+        runtime = LowConfidenceVoiceRuntime()
+        usda_search = ControlledUsdaSearch([COMPLETE_RESULT])
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+
+                result = create_consumption_event_from_voice(
+                    storage,
+                    usda_search,
+                    runtime,
+                    monotonic=lambda: 100.0,
+                )
+
+                self.assertIsNone(result)
+                self.assertEqual(storage.list_consumption_events(), [])
+
+        self.assertEqual(usda_search.queries, [])
+        self.assertEqual(runtime.failure_reason, "I could not confidently identify every Food Quantity.")
+        self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "failure"])
+
+    def test_invalid_item_rejects_the_entire_voice_report(self) -> None:
+        runtime = InvalidSecondFoodVoiceRuntime()
+        usda_search = ControlledUsdaSearch([COMPLETE_RESULT])
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+
+                result = create_consumption_event_from_voice(
+                    storage,
+                    usda_search,
+                    runtime,
+                    monotonic=lambda: 100.0,
+                )
+
+                self.assertIsNone(result)
+                self.assertEqual(storage.list_consumption_events(), [])
+
+        self.assertEqual(usda_search.queries, ["egg", "egg"])
+        self.assertEqual(runtime.failure_reason, "That quantity measure is not recognized by USDA.")
+        self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "failure"])
+
+    def test_voice_logs_stages_without_private_report_data(self) -> None:
+        runtime = ControlledVoiceRuntime()
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+                with self.assertLogs("snack_gpt.voice", level="INFO") as captured:
+                    create_consumption_event_from_voice(
+                        storage,
+                        ControlledUsdaSearch([]),
+                        runtime,
+                        monotonic=lambda: 100.0,
+                        timer=lambda: 10.0,
+                    )
+
+        logs = "\n".join(captured.output)
+        self.assertIn("utterance_id=", logs)
+        self.assertIn("stage=ingestion", logs)
+        self.assertIn("duration_ms=0.0", logs)
+        self.assertIn("failure_category=invalid_report", logs)
+        self.assertNotIn("I ate one egg", logs)
+        self.assertNotIn("egg", logs.lower())
+        self.assertNotIn("voice audio", logs)
+
+    def test_replayed_utterance_creates_a_consumption_report_at_most_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "events.sqlite3"
+            with Storage(database_path) as storage:
+                storage.initialize()
+                create_consumption_event_from_voice(
+                    storage,
+                    ControlledUsdaSearch([COMPLETE_RESULT]),
+                    ReplayVoiceRuntime(),
+                    monotonic=lambda: 100.0,
+                )
+
+            with Storage(database_path) as restarted_storage:
+                restarted_storage.initialize()
+                replay_runtime = ReplayVoiceRuntime()
+                replay = create_consumption_event_from_voice(
+                    restarted_storage,
+                    ControlledUsdaSearch([COMPLETE_RESULT]),
+                    replay_runtime,
+                    monotonic=lambda: 100.0,
+                )
+
+                self.assertIsNone(replay)
+                self.assertEqual(len(restarted_storage.list_consumption_events()), 1)
+
+        self.assertEqual(replay_runtime.failure_reason, "This Consumption Report was already recorded.")
+
+    def test_voice_report_creates_repeated_foods_atomically(self) -> None:
+        runtime = RepeatedFoodsVoiceRuntime()
+        usda_search = ControlledUsdaSearch([COMPLETE_RESULT])
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+
+                result = create_consumption_report_from_voice(
+                    storage,
+                    usda_search,
+                    runtime,
+                    monotonic=lambda: 100.0,
+                )
+
+                events = storage.list_consumption_events()
+
+            self.assertEqual(result, events)
+        self.assertEqual([event.quantity_value for event in events], [1.0, 2.0])
+        self.assertEqual(usda_search.queries, ["egg", "egg"])
+        self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "success"])
+
     def test_capture_timeout_reports_standard_reason(self) -> None:
         runtime = CaptureTimingOutRuntime()
         usda_search = ControlledUsdaSearch([COMPLETE_RESULT])
@@ -221,14 +381,17 @@ class VoiceTests(unittest.TestCase):
                 quantity_measure="large",
                 nutrition=NutritionSnapshot(71.5, 6.3, 0.36, 4.755),
             )
-            runtime.report_success(event, 130.0)
+            runtime.report_success([event], 130.0)
 
         self.assertEqual(capture.audio, b"report audio")
         self.assertEqual(capture.started_on, date(2026, 8, 25))
         self.assertEqual(transcript, "I ate one egg")
         self.assertEqual(
             extraction,
-            {"foods": [{"food": "egg", "quantity": 1, "measure": "large"}]},
+            {
+                "foods": [{"food": "egg", "quantity": 1, "measure": "large"}],
+                "confidence": 1,
+            },
         )
         self.assertEqual(
             controlled_commands.names,
@@ -314,7 +477,7 @@ class VoiceTests(unittest.TestCase):
         assert usda_search.timeouts[0] is not None
         self.assertGreater(usda_search.timeouts[0], 0)
         self.assertEqual(event.day, date(2026, 8, 25))
-        self.assertEqual(runtime.successful_event, event)
+        self.assertEqual(runtime.successful_events, [event])
         self.assertIsNone(runtime.failure_reason)
         self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "success"])
 
@@ -336,7 +499,7 @@ class VoiceTests(unittest.TestCase):
                 self.assertEqual(storage.list_consumption_events(), [])
 
         self.assertEqual(usda_search.queries, ["egg"])
-        self.assertIsNone(runtime.successful_event)
+        self.assertIsNone(runtime.successful_events)
         self.assertEqual(
             runtime.failure_reason,
             "No USDA result for that food contains complete nutrition information.",

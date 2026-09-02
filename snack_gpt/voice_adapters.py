@@ -120,13 +120,19 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
     extractor = cast(Callable[..., object], getattr(needle_module, "extract"))
     schema = {
         "name": "log_food_intake",
-        "description": "Extract one food and its explicit Food Quantity from the owner's words.",
+        "description": "Extract foods and their explicit Food Quantities from the owner's words.",
         "parameters": {
             "type": "object",
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence from zero to one that every food and Food Quantity is explicit.",
+                    "minimum": 0,
+                    "maximum": 1,
+                },
                 "foods": {
                     "type": "array",
-                    "description": "The food the owner consumed.",
+                    "description": "The foods the owner consumed, preserving repetitions.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -153,10 +159,9 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
                         "additionalProperties": False,
                     },
                     "minItems": 1,
-                    "maxItems": 1,
                 }
             },
-            "required": ["foods"],
+            "required": ["foods", "confidence"],
             "additionalProperties": False,
         },
     }
@@ -168,12 +173,14 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
     _write_json(
         output_path,
         {
+            "confidence": report.confidence,
             "foods": [
                 {
-                    "food": report.item.food,
-                    "quantity": report.item.quantity,
-                    "measure": report.item.measure,
+                    "food": item.food,
+                    "quantity": item.quantity,
+                    "measure": item.measure,
                 }
+                for item in report.items
             ]
         },
     )
@@ -182,8 +189,8 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
 def _speech_text(extraction_path: Path) -> str:
     value: object = json.loads(extraction_path.read_text(encoding="utf-8"))
     report = parse_consumption_report(value)
-    item = report.item
-    return f"Recorded {item.quantity:g} {item.measure} {item.food}."
+    descriptions = [f"{item.quantity:g} {item.measure} {item.food}" for item in report.items]
+    return f"Recorded {', '.join(descriptions)}."
 
 
 def _synthesize(

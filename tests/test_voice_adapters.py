@@ -15,26 +15,36 @@ from snack_gpt.voice import ExtractionError, parse_consumption_report
 class VoiceAdapterTests(unittest.TestCase):
     def test_needle_output_is_parsed_into_a_typed_consumption_report(self) -> None:
         report = parse_consumption_report(
-            {"foods": [{"food": "white rice cooked", "quantity": 0.75, "measure": "cup"}]}
+            {
+                "foods": [
+                    {"food": "white rice cooked", "quantity": 0.75, "measure": "cup"},
+                    {"food": "egg", "quantity": 2, "measure": "large"},
+                ],
+                "confidence": 0.9,
+            }
         )
 
-        self.assertEqual(report.item.food, "white rice cooked")
-        self.assertEqual(report.item.quantity, 0.75)
-        self.assertEqual(report.item.measure, "cup")
+        self.assertEqual([item.food for item in report.items], ["white rice cooked", "egg"])
+        self.assertEqual([item.quantity for item in report.items], [0.75, 2.0])
+        self.assertEqual([item.measure for item in report.items], ["cup", "large"])
 
     def test_malformed_needle_output_is_rejected(self) -> None:
         cases: dict[str, object] = {
             "non-object report": [],
-            "unknown top-level shape": {"foods": [], "transcript": "private"},
-            "empty report": {"foods": []},
-            "multiple items": {
-                "foods": [
-                    {"food": "egg", "quantity": 1, "measure": "large"},
-                    {"food": "toast", "quantity": 1, "measure": "slice"},
-                ]
+            "unknown top-level shape": {"foods": [], "confidence": 1, "transcript": "private"},
+            "empty report": {"foods": [], "confidence": 1},
+            "low confidence": {
+                "foods": [{"food": "egg", "quantity": 1, "measure": "large"}],
+                "confidence": 0.5,
             },
-            "blank food": {"foods": [{"food": " ", "quantity": 1, "measure": "gram"}]},
-            "missing quantity": {"foods": [{"food": "egg", "measure": "large"}]},
+            "blank food": {
+                "foods": [{"food": " ", "quantity": 1, "measure": "gram"}],
+                "confidence": 1,
+            },
+            "missing quantity": {
+                "foods": [{"food": "egg", "measure": "large"}],
+                "confidence": 1,
+            },
             "nonnumeric quantity": {
                 "foods": [{"food": "egg", "quantity": "one", "measure": "large"}]
             },
@@ -61,7 +71,7 @@ class VoiceAdapterTests(unittest.TestCase):
             modules.mkdir()
             (modules / "needle.py").write_text(
                 "def extract(text, schema, weights=None):\n"
-                "    return {'foods': [{'food': 'egg', 'quantity': 1}]}\n",
+                "    return {'foods': [{'food': 'egg', 'quantity': 1}], 'confidence': 1}\n",
                 encoding="utf-8",
             )
             transcript = root / "transcript.txt"
@@ -117,7 +127,8 @@ class VoiceAdapterTests(unittest.TestCase):
                 "    item = schema['parameters']['properties']['foods']['items']\n"
                 "    assert item['required'] == ['food', 'quantity', 'measure']\n"
                 "    assert item['properties']['quantity']['exclusiveMinimum'] == 0\n"
-                "    return {'foods': [{'food': 'white rice cooked', 'quantity': 0.75, 'measure': 'cup'}]}\n",
+                "    assert schema['parameters']['required'] == ['foods', 'confidence']\n"
+                "    return {'foods': [{'food': 'white rice cooked', 'quantity': 0.75, 'measure': 'cup'}], 'confidence': 0.9}\n",
                 encoding="utf-8",
             )
             fake_binary = root / "fake_binary.py"
@@ -237,7 +248,7 @@ class VoiceAdapterTests(unittest.TestCase):
                 self.assertTrue(socket_path.exists())
                 extraction = root / "extraction.json"
                 extraction.write_text(
-                    '{"foods":[{"food":"egg","quantity":2,"measure":"large"}]}',
+                    '{"foods":[{"food":"egg","quantity":2,"measure":"large"}],"confidence":1}',
                     encoding="utf-8",
                 )
                 speech = root / "speech.wav"

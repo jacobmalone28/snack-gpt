@@ -94,6 +94,7 @@ def create_consumption_report(
     items: Sequence[ConsumptionReportItem],
     day: str,
     timeout_seconds: float | None = None,
+    utterance_id: str | None = None,
 ) -> list[ConsumptionEvent]:
     if not items:
         raise IngestionError("Enter at least one food and Food Quantity.")
@@ -121,8 +122,8 @@ def create_consumption_report(
         )
     if deadline is not None and time.monotonic() >= deadline:
         raise TimeoutError("USDA search deadline expired")
-    storage.create_consumption_events(events)
-    return events
+    created = storage.create_consumption_events(events, utterance_id=utterance_id)
+    return events if created else []
 
 
 def correct_consumption_event(

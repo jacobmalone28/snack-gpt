@@ -37,7 +37,7 @@ class CliTests(unittest.TestCase):
             ), patch(
                 "snack_gpt.__main__.CommandVoiceRuntime", return_value=object()
             ), patch(
-                "snack_gpt.__main__.create_consumption_event_from_voice",
+                "snack_gpt.__main__.create_consumption_report_from_voice",
                 side_effect=[VoiceProcessingError("private runtime detail"), KeyboardInterrupt],
             ) as create_from_voice, patch("sys.stderr", stderr):
                 result = run(["listen"])
@@ -64,7 +64,7 @@ class CliTests(unittest.TestCase):
             ) as load_commands, patch(
                 "snack_gpt.__main__.CommandVoiceRuntime", return_value=runtime
             ), patch(
-                "snack_gpt.__main__.create_consumption_event_from_voice",
+                "snack_gpt.__main__.create_consumption_report_from_voice",
                 side_effect=KeyboardInterrupt,
             ) as create_from_voice:
                 result = run(["listen"])
@@ -73,7 +73,7 @@ class CliTests(unittest.TestCase):
                 health = storage.health()
 
         self.assertEqual(result, 0)
-        self.assertEqual(health.schema_version, 3)
+        self.assertEqual(health.schema_version, 4)
         load_commands.assert_called_once_with(manifest_path)
         self.assertEqual(create_from_voice.call_count, 1)
         self.assertIs(create_from_voice.call_args.args[2], runtime)
@@ -202,7 +202,7 @@ class CliTests(unittest.TestCase):
             )
 
             self.assertEqual(first_result.returncode, 0)
-            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 3)\n")
+            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 4)\n")
             self.assertEqual(second_result.returncode, 0)
             self.assertEqual(second_result.stdout, first_result.stdout)
             self.assertTrue(database_path.is_file())
