@@ -14,6 +14,7 @@ class Settings:
     host: str
     port: int
     usda_api_key: str | None = None
+    voice_manifest_path: Path | None = None
 
     @property
     def authentication_required(self) -> bool:
@@ -37,4 +38,9 @@ class Settings:
             host=environment.get("SNACK_GPT_HOST", "127.0.0.1"),
             port=port,
             usda_api_key=environment.get("USDA_FDC_API_KEY"),
+            voice_manifest_path=(
+                Path(environment["SNACK_GPT_VOICE_MANIFEST"])
+                if environment.get("SNACK_GPT_VOICE_MANIFEST")
+                else None
+            ),
         )

@@ -255,6 +255,24 @@ class VoiceAdapterTests(unittest.TestCase):
 
                 with wave.open(str(speech), "rb") as output:
                     self.assertEqual(output.readframes(output.getnframes()), b"Recorded 2 large egg.")
+
+                direct_speech = root / "direct-speech.wav"
+                self._run_adapter(
+                    environment,
+                    "synthesize",
+                    "--socket",
+                    socket_path,
+                    "--text",
+                    "Processing took too long.",
+                    "--output",
+                    direct_speech,
+                )
+
+                with wave.open(str(direct_speech), "rb") as output:
+                    self.assertEqual(
+                        output.readframes(output.getnframes()),
+                        b"Processing took too long.",
+                    )
             finally:
                 worker.terminate()
                 worker.wait(timeout=5)

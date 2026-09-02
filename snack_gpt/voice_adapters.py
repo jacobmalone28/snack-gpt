@@ -190,7 +190,7 @@ def _synthesize(
     binary: Path,
     binary_arguments: Sequence[str],
     model_path: Path,
-    extraction_path: Path,
+    text: str,
     output_path: Path,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +203,7 @@ def _synthesize(
             "-f",
             str(output_path),
             "--",
-            _speech_text(extraction_path),
+            text,
         ],
         "Piper",
     )
@@ -242,8 +242,8 @@ def _piper_worker(model_path: Path, socket_path: Path) -> None:
                 connection.sendall(json.dumps(response).encode("utf-8"))
 
 
-def _synthesize_warm(socket_path: Path, extraction_path: Path, output_path: Path) -> None:
-    request = json.dumps({"text": _speech_text(extraction_path), "output": str(output_path)})
+def _synthesize_warm(socket_path: Path, text: str, output_path: Path) -> None:
+    request = json.dumps({"text": text, "output": str(output_path)})
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(str(socket_path))
         client.sendall(request.encode("utf-8"))
@@ -286,7 +286,9 @@ def _parser() -> argparse.ArgumentParser:
     synthesize_runtime.add_argument("--socket", type=Path)
     synthesize.add_argument("--binary-argument", action="append", default=[])
     synthesize.add_argument("--model", type=Path)
-    synthesize.add_argument("--extraction", type=Path, required=True)
+    synthesize_input = synthesize.add_mutually_exclusive_group(required=True)
+    synthesize_input.add_argument("--extraction", type=Path)
+    synthesize_input.add_argument("--text")
     synthesize.add_argument("--output", type=Path, required=True)
 
     piper_worker = commands.add_parser("piper-worker")
@@ -305,12 +307,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
         elif parsed.command == "extract":
             _extract(parsed.model, parsed.library, parsed.transcript, parsed.output)
         elif parsed.command == "synthesize":
+            text = parsed.text if parsed.text is not None else _speech_text(parsed.extraction)
             if parsed.socket:
-                _synthesize_warm(parsed.socket, parsed.extraction, parsed.output)
+                _synthesize_warm(parsed.socket, text, parsed.output)
             else:
                 if parsed.model is None:
                     raise AdapterError("--model is required with --binary")
-                _synthesize(parsed.binary, parsed.binary_argument, parsed.model, parsed.extraction, parsed.output)
+                _synthesize(parsed.binary, parsed.binary_argument, parsed.model, text, parsed.output)
         elif parsed.command == "piper-worker":
             _piper_worker(parsed.model, parsed.socket)
     except (AdapterError, ImportError, OSError, ValueError, json.JSONDecodeError) as error:

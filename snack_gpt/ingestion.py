@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 import math
+import time
 from typing import Protocol
 from uuid import uuid4
 
@@ -32,7 +33,12 @@ class ConsumptionReportItem:
 
 
 class UsdaSearch(Protocol):
-    def search(self, query: str) -> Sequence[FoodSearchResult]: ...
+    def search(
+        self,
+        query: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Sequence[FoodSearchResult]: ...
 
 
 def _resolve_measure(
@@ -70,12 +76,14 @@ def create_consumption_event(
     quantity: str,
     measure: str,
     day: str,
+    timeout_seconds: float | None = None,
 ) -> ConsumptionEvent:
     return create_consumption_report(
         storage,
         usda_search,
         items=[ConsumptionReportItem(food, quantity, measure)],
         day=day,
+        timeout_seconds=timeout_seconds,
     )[0]
 
 
@@ -85,6 +93,7 @@ def create_consumption_report(
     *,
     items: Sequence[ConsumptionReportItem],
     day: str,
+    timeout_seconds: float | None = None,
 ) -> list[ConsumptionEvent]:
     if not items:
         raise IngestionError("Enter at least one food and Food Quantity.")
@@ -96,10 +105,22 @@ def create_consumption_report(
     if event_day > date.today():
         raise IngestionError("Consumption Events cannot be created for a future day.")
 
-    events = [
-        _build_consumption_event(usda_search, item=item, event_day=event_day)
-        for item in items
-    ]
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+    events: list[ConsumptionEvent] = []
+    for item in items:
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            raise TimeoutError("USDA search deadline expired")
+        events.append(
+            _build_consumption_event(
+                usda_search,
+                item=item,
+                event_day=event_day,
+                timeout_seconds=remaining,
+            )
+        )
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("USDA search deadline expired")
     storage.create_consumption_events(events)
     return events
 
@@ -173,6 +194,7 @@ def _build_consumption_event(
     *,
     item: ConsumptionReportItem,
     event_day: date,
+    timeout_seconds: float | None = None,
 ) -> ConsumptionEvent:
     food = item.food
     quantity = item.quantity
@@ -195,7 +217,7 @@ def _build_consumption_event(
     complete_result = next(
         (
             result
-            for result in usda_search.search(query)
+            for result in usda_search.search(query, timeout_seconds=timeout_seconds)
             if {"calories", "protein", "carbohydrates", "fat"}
             <= result.nutrients_per_100_grams.keys()
         ),
