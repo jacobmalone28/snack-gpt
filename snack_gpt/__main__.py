@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 from collections.abc import Sequence
 from getpass import getpass
+import logging
 from wsgiref.simple_server import make_server
 
 from dotenv import load_dotenv
@@ -12,7 +13,7 @@ from snack_gpt.config import ConfigurationError, Settings
 from snack_gpt.http import create_application
 from snack_gpt.storage import Storage
 from snack_gpt.usda import FoodDataCentralSearch
-from snack_gpt.voice import VoiceProcessingError, create_consumption_event_from_voice
+from snack_gpt.voice import VoiceProcessingError, create_consumption_report_from_voice
 from snack_gpt.voice_runtime import CommandVoiceRuntime, VoiceRuntimeError, load_voice_manifest
 
 
@@ -57,6 +58,7 @@ def run(arguments: Sequence[str]) -> int:
         return 0
 
     if command == ("listen",):
+        logging.basicConfig(level=logging.INFO)
         if settings.usda_api_key is None:
             print("Configuration error: USDA_FDC_API_KEY is required for voice reports", file=sys.stderr)
             return 2
@@ -75,7 +77,7 @@ def run(arguments: Sequence[str]) -> int:
             try:
                 while True:
                     try:
-                        create_consumption_event_from_voice(storage, usda_search, runtime)
+                        create_consumption_report_from_voice(storage, usda_search, runtime)
                     except VoiceProcessingError:
                         print("Voice feedback failed; resuming listening.", file=sys.stderr)
             except KeyboardInterrupt:

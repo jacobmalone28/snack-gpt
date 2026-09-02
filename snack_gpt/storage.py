@@ -99,6 +99,17 @@ class Storage:
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version) VALUES (3)"
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS processed_utterances (
+                    utterance_id TEXT PRIMARY KEY,
+                    processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            self._connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (4)"
+            )
 
     def set_owner_password_hash(self, password_hash: str) -> None:
         with self._connection:
@@ -151,8 +162,20 @@ class Storage:
     def create_consumption_event(self, event: ConsumptionEvent) -> None:
         self.create_consumption_events([event])
 
-    def create_consumption_events(self, events: Sequence[ConsumptionEvent]) -> None:
+    def create_consumption_events(
+        self,
+        events: Sequence[ConsumptionEvent],
+        *,
+        utterance_id: str | None = None,
+    ) -> bool:
         with self._connection:
+            if utterance_id is not None:
+                cursor = self._connection.execute(
+                    "INSERT OR IGNORE INTO processed_utterances (utterance_id) VALUES (?)",
+                    (utterance_id,),
+                )
+                if cursor.rowcount == 0:
+                    return False
             self._connection.executemany(
                 """
                 INSERT INTO consumption_events (
@@ -178,6 +201,7 @@ class Storage:
                     for event in events
                 ],
             )
+        return True
 
     def update_consumption_event(
         self, event: ConsumptionEvent, expected_revision: int

@@ -690,7 +690,7 @@ class HttpTests(unittest.TestCase):
             self.assertIn("<h1>Snack-GPT</h1>", body)
             self.assertIn("Application ready", body)
             self.assertIn("Storage healthy", body)
-            self.assertIn("Schema 3", body)
+            self.assertIn("Schema 4", body)
             self.assertIn('action="/consumption-events"', body)
             self.assertIn('name="food"', body)
             self.assertIn('name="quantity"', body)
@@ -731,7 +731,7 @@ class HttpTests(unittest.TestCase):
                 {
                     "application": "ready",
                     "storage": "healthy",
-                    "schema_version": 3,
+                    "schema_version": 4,
                 },
             )
 

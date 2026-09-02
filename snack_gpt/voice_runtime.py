@@ -15,6 +15,7 @@ from snack_gpt.voice import CapturedSpeech, VoiceProcessingError, VoiceProcessin
 
 
 CAPTURE_TIMEOUT_SECONDS = 15.0
+CAPTURE_SILENCE_SECONDS = 1.0
 FEEDBACK_TIMEOUT_SECONDS = 10.0
 REQUIRED_COMMANDS = {
     "wake_capture",
@@ -121,7 +122,10 @@ class CommandVoiceRuntime:
         started_on = self._today()
         self._run(
             "speech_capture",
-            {"audio": str(audio_path)},
+            {
+                "audio": str(audio_path),
+                "silence_seconds": str(CAPTURE_SILENCE_SECONDS),
+            },
             timeout=CAPTURE_TIMEOUT_SECONDS,
         )
         try:
@@ -174,8 +178,12 @@ class CommandVoiceRuntime:
             raise VoiceRuntimeError("Food extraction failed.") from error
         return self._extraction
 
-    def report_success(self, event: ConsumptionEvent, deadline: float) -> None:
-        text = f"Recorded {event.quantity_value:g} {event.quantity_measure} {event.food_description}."
+    def report_success(self, events: Sequence[ConsumptionEvent], deadline: float) -> None:
+        descriptions = [
+            f"{event.quantity_value:g} {event.quantity_measure} {event.food_description}"
+            for event in events
+        ]
+        text = f"Recorded {', '.join(descriptions)}."
         self._report("success_sound", text, deadline)
 
     def report_failure(self, reason: str, deadline: float) -> None:

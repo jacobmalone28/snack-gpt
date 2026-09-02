@@ -44,9 +44,9 @@ Commands are executed directly without a shell and must obey these contracts:
 | --- | --- |
 | `wake_capture` | Write a non-empty audio clip to `{audio}`. |
 | `wake_detection` | Read `{audio}` and write JSON containing `{"detected": true/false}` to `{output}`. |
-| `speech_capture` | Write non-empty report audio to `{audio}`; Snack-GPT terminates it after 15 seconds. |
+| `speech_capture` | Write non-empty report audio to `{audio}`, ending after approximately `{silence_seconds}` of silence; Snack-GPT terminates it after 15 seconds. |
 | `transcription` | Read `{audio}` and write a non-blank UTF-8 transcript to `{output}`. |
-| `extraction` | Read `{transcript}` and write `{"foods":[{"food":"egg","quantity":1,"measure":"large"}]}` to `{output}`. Exactly one food is required. |
+| `extraction` | Read `{transcript}` and write `{"foods":[{"food":"egg","quantity":1,"measure":"large"}],"confidence":0.95}` to `{output}`. Preserve repeated foods and include confidence from zero to one. |
 | `success_sound` / `error_sound` | Play the corresponding sound and exit when playback finishes. |
 | `speech_synthesis` | Synthesize `{text}` and write non-empty audio to `{output}`. |
 | `play_speech` | Play `{audio}` and exit when playback finishes. |
@@ -59,7 +59,7 @@ For example:
 	"commands": {
 		"wake_capture": ["voice-capture", "--wake", "--output", "{audio}"],
 		"wake_detection": ["openwakeword-probe", "--model", "/opt/snack-gpt/models/hey_jarvis_v0.1.onnx", "--audio", "{audio}", "--output", "{output}"],
-		"speech_capture": ["voice-capture", "--until-silence", "--output", "{audio}"],
+		"speech_capture": ["voice-capture", "--until-silence", "{silence_seconds}", "--output", "{audio}"],
 		"transcription": ["whisper-probe", "--binary", "/opt/snack-gpt/bin/whisper-cli", "--model", "/opt/snack-gpt/models/ggml-tiny.en.bin", "--audio", "{audio}", "--output", "{output}"],
 		"extraction": ["needle-probe", "--library", "/opt/snack-gpt/lib/libneedle.so", "--transcript", "{transcript}", "--output", "{output}"],
 		"success_sound": ["voice-play", "success.wav"],

@@ -103,9 +103,19 @@ class StorageTests(unittest.TestCase):
                 )
 
                 with self.assertRaises(sqlite3.IntegrityError):
-                    storage.create_consumption_events([event, event])
+                    storage.create_consumption_events(
+                        [event, event],
+                        utterance_id="utterance-id",
+                    )
 
                 self.assertEqual(storage.list_consumption_events(), [])
+                self.assertTrue(
+                    storage.create_consumption_events(
+                        [event],
+                        utterance_id="utterance-id",
+                    )
+                )
+                self.assertEqual(storage.list_consumption_events(), [event])
 
     def test_initialization_survives_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -119,7 +129,7 @@ class StorageTests(unittest.TestCase):
                 restarted_storage.initialize()
                 restarted_health = restarted_storage.health()
 
-            self.assertEqual(first_health.schema_version, 3)
+            self.assertEqual(first_health.schema_version, 4)
             self.assertTrue(first_health.writable)
             self.assertEqual(restarted_health, first_health)
 
