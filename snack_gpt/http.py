@@ -62,10 +62,15 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                             start_response, "401 Unauthorized", "Login failed."
                         )
                     token = new_session_token()
-                    storage.create_owner_session(
+                    session_created = storage.create_owner_session(
                         session_token_hash(token),
                         int(time.time()) + _SESSION_DURATION_SECONDS,
+                        password_hash,
                     )
+                    if not session_created:
+                        return _login_response(
+                            start_response, "401 Unauthorized", "Login failed."
+                        )
                 return _redirect_response(
                     start_response,
                     "/",

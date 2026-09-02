@@ -117,12 +117,20 @@ class Storage:
         ).fetchone()
         return str(row[0]) if row is not None else None
 
-    def create_owner_session(self, token_hash: str, expires_at: int) -> None:
+    def create_owner_session(
+        self, token_hash: str, expires_at: int, expected_password_hash: str
+    ) -> bool:
         with self._connection:
-            self._connection.execute(
-                "INSERT INTO owner_sessions (token_hash, expires_at) VALUES (?, ?)",
-                (token_hash, expires_at),
+            cursor = self._connection.execute(
+                """
+                INSERT INTO owner_sessions (token_hash, expires_at)
+                SELECT ?, ?
+                FROM owner_credentials
+                WHERE owner_id = 1 AND password_hash = ?
+                """,
+                (token_hash, expires_at, expected_password_hash),
             )
+        return cursor.rowcount == 1
 
     def owner_session_is_valid(self, token_hash: str, now: int) -> bool:
         with self._connection:

@@ -17,7 +17,7 @@ class StorageTests(unittest.TestCase):
                 first_hash = hash_password("first password")
                 storage.set_owner_password_hash(first_hash)
                 token_hash = session_token_hash("session secret")
-                storage.create_owner_session(token_hash, 200)
+                self.assertTrue(storage.create_owner_session(token_hash, 200, first_hash))
 
                 replacement_hash = hash_password("replacement password")
                 storage.set_owner_password_hash(replacement_hash)
@@ -30,6 +30,20 @@ class StorageTests(unittest.TestCase):
             self.assertNotIn(b"first password", database_contents)
             self.assertNotIn(b"replacement password", database_contents)
             self.assertNotIn(b"session secret", database_contents)
+
+    def test_session_creation_rejects_a_hash_invalidated_by_password_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "snack-gpt.sqlite3") as storage:
+                storage.initialize()
+                verified_hash = hash_password("first password")
+                storage.set_owner_password_hash(verified_hash)
+
+                storage.set_owner_password_hash(hash_password("replacement password"))
+                token_hash = session_token_hash("stale login session")
+                created = storage.create_owner_session(token_hash, 200, verified_hash)
+
+                self.assertFalse(created)
+                self.assertFalse(storage.owner_session_is_valid(token_hash, 100))
 
     def test_stale_mutations_preserve_the_newer_consumption_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
