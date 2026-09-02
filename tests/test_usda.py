@@ -1,9 +1,27 @@
 import unittest
+from unittest.mock import patch
+from urllib.error import URLError
+from io import BytesIO
 
-from snack_gpt.usda import FoodDataCentralSearch
+from snack_gpt.usda import FoodDataCentralSearch, UsdaError, _fetch_json
 
 
 class FoodDataCentralSearchTests(unittest.TestCase):
+    def test_malformed_responses_are_normalized(self) -> None:
+        with patch("snack_gpt.usda.urlopen", return_value=BytesIO(b"not-json")):
+            with self.assertRaisesRegex(UsdaError, "USDA is unavailable"):
+                _fetch_json("/foods/search", {}, 1.0)
+
+    def test_transport_failures_are_normalized_without_response_details(self) -> None:
+        with patch(
+            "snack_gpt.usda.urlopen",
+            side_effect=URLError("private response detail"),
+        ):
+            with self.assertRaisesRegex(UsdaError, "USDA is unavailable") as raised:
+                _fetch_json("/foods/search", {}, 1.0)
+
+        self.assertNotIn("private response detail", str(raised.exception))
+
     def test_search_requests_share_one_timeout_budget(self) -> None:
         responses: dict[str, object] = {
             "/foods/search": {"foods": [{"fdcId": 20}]},

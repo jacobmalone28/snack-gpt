@@ -7,6 +7,7 @@ from typing import Protocol, cast
 
 from snack_gpt.ingestion import IngestionError, UsdaSearch, create_consumption_event
 from snack_gpt.storage import ConsumptionEvent, Storage
+from snack_gpt.usda import UsdaError
 
 
 VOICE_PROCESSING_TIMEOUT_SECONDS = 30.0
@@ -111,6 +112,10 @@ def create_consumption_event_from_voice(
 ) -> ConsumptionEvent | None:
     try:
         capture = runtime.wait_for_wake_and_capture()
+    except VoiceProcessingTimeout:
+        deadline = monotonic() + VOICE_PROCESSING_TIMEOUT_SECONDS
+        runtime.report_failure("Processing took too long.", deadline)
+        return None
     except VoiceProcessingError as error:
         deadline = monotonic() + VOICE_PROCESSING_TIMEOUT_SECONDS
         runtime.report_failure(str(error), deadline)
@@ -135,7 +140,7 @@ def create_consumption_event_from_voice(
     except (VoiceProcessingTimeout, TimeoutError):
         runtime.report_failure("Processing took too long.", final_deadline)
         return None
-    except (ExtractionError, IngestionError, VoiceProcessingError) as error:
+    except (ExtractionError, IngestionError, UsdaError, VoiceProcessingError) as error:
         runtime.report_failure(str(error), final_deadline)
         return None
     runtime.report_success(event, final_deadline)

@@ -13,7 +13,7 @@ from snack_gpt.http import create_application
 from snack_gpt.storage import Storage
 from snack_gpt.usda import FoodDataCentralSearch
 from snack_gpt.voice import VoiceProcessingError, create_consumption_event_from_voice
-from snack_gpt.voice_runtime import CommandVoiceRuntime, VoiceRuntimeError, load_voice_commands
+from snack_gpt.voice_runtime import CommandVoiceRuntime, VoiceRuntimeError, load_voice_manifest
 
 
 def run(arguments: Sequence[str]) -> int:
@@ -64,7 +64,8 @@ def run(arguments: Sequence[str]) -> int:
             print("Configuration error: SNACK_GPT_VOICE_MANIFEST is required for listening", file=sys.stderr)
             return 2
         try:
-            runtime = CommandVoiceRuntime(load_voice_commands(settings.voice_manifest_path))
+            manifest = load_voice_manifest(settings.voice_manifest_path)
+            runtime = CommandVoiceRuntime(manifest.commands, manifest.memory_directory)
         except VoiceRuntimeError as error:
             print(f"Configuration error: {error}", file=sys.stderr)
             return 2

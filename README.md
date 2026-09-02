@@ -32,11 +32,45 @@ Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available
 ## Listen for voice reports
 
 Set `SNACK_GPT_VOICE_MANIFEST` to a JSON manifest containing local command
-arrays named `wake_capture`, `wake_detection`, `speech_capture`,
-`transcription`, `extraction`, `success_sound`, `error_sound`,
-`speech_synthesis`, and `play_speech`. Commands use `{audio}`, `{output}`,
-`{transcript}`, or `{text}` placeholders as appropriate. They are executed
-directly without a shell. Start the continuous listener with:
+arrays and a `memory_directory`. The directory must be backed only by memory,
+not persistent storage, because native voice tools exchange audio and transcript
+data there. Use a tmpfs such as `/dev/shm` on Linux or a provisioned RAM-disk
+mount on macOS and Windows. Snack-GPT rejects a missing directory but cannot
+verify how the operating system mounted it.
+
+Commands are executed directly without a shell and must obey these contracts:
+
+| Command | Contract |
+| --- | --- |
+| `wake_capture` | Write a non-empty audio clip to `{audio}`. |
+| `wake_detection` | Read `{audio}` and write JSON containing `{"detected": true/false}` to `{output}`. |
+| `speech_capture` | Write non-empty report audio to `{audio}`; Snack-GPT terminates it after 15 seconds. |
+| `transcription` | Read `{audio}` and write a non-blank UTF-8 transcript to `{output}`. |
+| `extraction` | Read `{transcript}` and write `{"foods":[{"food":"egg","quantity":1,"measure":"large"}]}` to `{output}`. Exactly one food is required. |
+| `success_sound` / `error_sound` | Play the corresponding sound and exit when playback finishes. |
+| `speech_synthesis` | Synthesize `{text}` and write non-empty audio to `{output}`. |
+| `play_speech` | Play `{audio}` and exit when playback finishes. |
+
+For example:
+
+```json
+{
+	"memory_directory": "/dev/shm",
+	"commands": {
+		"wake_capture": ["voice-capture", "--wake", "--output", "{audio}"],
+		"wake_detection": ["openwakeword-probe", "--model", "/opt/snack-gpt/models/hey_jarvis_v0.1.onnx", "--audio", "{audio}", "--output", "{output}"],
+		"speech_capture": ["voice-capture", "--until-silence", "--output", "{audio}"],
+		"transcription": ["whisper-probe", "--binary", "/opt/snack-gpt/bin/whisper-cli", "--model", "/opt/snack-gpt/models/ggml-tiny.en.bin", "--audio", "{audio}", "--output", "{output}"],
+		"extraction": ["needle-probe", "--library", "/opt/snack-gpt/lib/libneedle.so", "--transcript", "{transcript}", "--output", "{output}"],
+		"success_sound": ["voice-play", "success.wav"],
+		"error_sound": ["voice-play", "error.wav"],
+		"speech_synthesis": ["piper-probe", "--socket", "/run/snack-gpt/piper.sock", "--text", "{text}", "--output", "{output}"],
+		"play_speech": ["voice-play", "{audio}"]
+	}
+}
+```
+
+Start the continuous listener with:
 
 ```console
 python3 -m snack_gpt listen
@@ -44,8 +78,9 @@ python3 -m snack_gpt listen
 
 Wake detection pauses while each report is transcribed, extracted, sent to
 USDA, stored, and acknowledged. Speech capture is stopped after 15 seconds and
-processing shares a 30-second deadline. Temporary audio, transcripts,
-extractions, and synthesized feedback are removed after every report.
+processing shares a 30-second deadline. Audio, transcripts, extractions, and
+synthesized feedback remain in the memory-backed directory and are removed
+after every report.
 
 ## Optional LAN access
 

@@ -3,6 +3,7 @@ import json
 import re
 import time
 from typing import cast
+from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -10,6 +11,10 @@ from snack_gpt.ingestion import FoodSearchResult
 
 
 FetchJson = Callable[[str, dict[str, str], float], object]
+
+
+class UsdaError(Exception):
+    pass
 
 
 class FoodDataCentralSearch:
@@ -164,6 +169,9 @@ def _as_list(value: object) -> list[object] | None:
 
 def _fetch_json(path: str, parameters: dict[str, str], timeout_seconds: float) -> object:
     url = f"https://api.nal.usda.gov/fdc/v1{path}?{urlencode(parameters)}"
-    with urlopen(url, timeout=timeout_seconds) as response:
-        result: object = json.load(response)
+    try:
+        with urlopen(url, timeout=timeout_seconds) as response:
+            result: object = json.load(response)
+    except (URLError, OSError, json.JSONDecodeError) as error:
+        raise UsdaError("USDA is unavailable.") from error
     return result

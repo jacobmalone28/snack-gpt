@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 import json
 from pathlib import Path
@@ -33,7 +34,13 @@ class VoiceRuntimeError(VoiceProcessingError):
     pass
 
 
-def load_voice_commands(path: Path) -> dict[str, tuple[str, ...]]:
+@dataclass(frozen=True)
+class VoiceManifest:
+    commands: Mapping[str, Sequence[str]]
+    memory_directory: Path
+
+
+def load_voice_manifest(path: Path) -> VoiceManifest:
     try:
         value: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -41,6 +48,12 @@ def load_voice_commands(path: Path) -> dict[str, tuple[str, ...]]:
     if not isinstance(value, dict):
         raise VoiceRuntimeError("Voice manifest must contain a JSON object.")
     manifest = cast(dict[object, object], value)
+    memory_directory_value = manifest.get("memory_directory")
+    if not isinstance(memory_directory_value, str) or not memory_directory_value:
+        raise VoiceRuntimeError("Voice manifest must contain memory_directory.")
+    memory_directory = Path(memory_directory_value)
+    if not memory_directory.is_dir():
+        raise VoiceRuntimeError("Voice manifest memory_directory must be an existing directory.")
     commands_value = manifest.get("commands")
     if not isinstance(commands_value, dict):
         raise VoiceRuntimeError("Voice manifest must contain a commands object.")
@@ -56,19 +69,21 @@ def load_voice_commands(path: Path) -> dict[str, tuple[str, ...]]:
     missing = REQUIRED_COMMANDS - commands.keys()
     if missing:
         raise VoiceRuntimeError(f"Voice manifest is missing commands: {', '.join(sorted(missing))}.")
-    return commands
+    return VoiceManifest(commands, memory_directory)
 
 
 class CommandVoiceRuntime:
     def __init__(
         self,
         commands: Mapping[str, Sequence[str]],
+        memory_directory: Path,
         *,
         run_command: RunCommand | None = None,
         today: Callable[[], date] = date.today,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._commands = commands
+        self._memory_directory = memory_directory
         self._run_command = run_command or _run_command
         self._today = today
         self._monotonic = monotonic
@@ -78,7 +93,10 @@ class CommandVoiceRuntime:
     def wait_for_wake_and_capture(self) -> CapturedSpeech:
         self._cleanup()
         while True:
-            with tempfile.TemporaryDirectory(prefix="snack-gpt-wake-") as directory:
+            with tempfile.TemporaryDirectory(
+                prefix="snack-gpt-wake-",
+                dir=self._memory_directory,
+            ) as directory:
                 root = Path(directory)
                 wake_audio = root / "wake.wav"
                 wake_result = root / "wake.json"
@@ -90,12 +108,15 @@ class CommandVoiceRuntime:
                 try:
                     result: object = json.loads(wake_result.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError) as error:
-                    raise VoiceRuntimeError(f"Wake detection produced invalid output: {error}") from error
+                    raise VoiceRuntimeError("Wake detection produced invalid output.") from error
                 if not isinstance(result, dict) or cast(dict[object, object], result).get("detected") is not True:
                     continue
                 break
 
-        self._artifacts = tempfile.TemporaryDirectory(prefix="snack-gpt-report-")
+        self._artifacts = tempfile.TemporaryDirectory(
+            prefix="snack-gpt-report-",
+            dir=self._memory_directory,
+        )
         audio_path = Path(self._artifacts.name) / "report.wav"
         started_on = self._today()
         self._run(
@@ -107,7 +128,7 @@ class CommandVoiceRuntime:
             audio = audio_path.read_bytes()
         except OSError as error:
             self._cleanup()
-            raise VoiceRuntimeError(f"Speech capture failed: {error}") from error
+            raise VoiceRuntimeError("Speech capture failed.") from error
         if not audio:
             self._cleanup()
             raise VoiceRuntimeError("Speech capture produced no audio.")
@@ -117,7 +138,10 @@ class CommandVoiceRuntime:
         root = self._artifact_root()
         audio_path = root / "report.wav"
         transcript_path = root / "transcript.txt"
-        audio_path.write_bytes(audio)
+        try:
+            audio_path.write_bytes(audio)
+        except OSError as error:
+            raise VoiceRuntimeError("Transcription failed.") from error
         self._run(
             "transcription",
             {"audio": str(audio_path), "output": str(transcript_path)},
@@ -126,7 +150,7 @@ class CommandVoiceRuntime:
         try:
             transcript = transcript_path.read_text(encoding="utf-8").strip()
         except OSError as error:
-            raise VoiceRuntimeError(f"Transcription failed: {error}") from error
+            raise VoiceRuntimeError("Transcription failed.") from error
         if not transcript:
             raise VoiceRuntimeError("I could not understand the speech.")
         return transcript
@@ -135,7 +159,10 @@ class CommandVoiceRuntime:
         root = self._artifact_root()
         transcript_path = root / "transcript.txt"
         extraction_path = root / "extraction.json"
-        transcript_path.write_text(transcript, encoding="utf-8")
+        try:
+            transcript_path.write_text(transcript, encoding="utf-8")
+        except OSError as error:
+            raise VoiceRuntimeError("Food extraction failed.") from error
         self._run(
             "extraction",
             {"transcript": str(transcript_path), "output": str(extraction_path)},
@@ -144,7 +171,7 @@ class CommandVoiceRuntime:
         try:
             self._extraction = json.loads(extraction_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            raise VoiceRuntimeError(f"Food extraction failed: {error}") from error
+            raise VoiceRuntimeError("Food extraction failed.") from error
         return self._extraction
 
     def report_success(self, event: ConsumptionEvent, deadline: float) -> None:
@@ -183,16 +210,24 @@ class CommandVoiceRuntime:
         try:
             command = [part.format_map(replacements) for part in self._commands[name]]
         except (KeyError, ValueError) as error:
-            raise VoiceRuntimeError(f"Voice command {name} is invalid: {error}") from error
+            raise VoiceRuntimeError(f"Voice command {name} is invalid.") from error
         if deadline is not None:
             timeout = deadline - self._monotonic()
             if timeout <= 0:
                 raise VoiceProcessingTimeout
-        self._run_command(command, timeout)
+        try:
+            self._run_command(command, timeout)
+        except VoiceProcessingTimeout:
+            raise
+        except VoiceRuntimeError as error:
+            raise VoiceRuntimeError(f"Voice command {name} failed.") from error
 
     def _artifact_root(self) -> Path:
         if self._artifacts is None:
-            self._artifacts = tempfile.TemporaryDirectory(prefix="snack-gpt-report-")
+            self._artifacts = tempfile.TemporaryDirectory(
+                prefix="snack-gpt-report-",
+                dir=self._memory_directory,
+            )
         return Path(self._artifacts.name)
 
     def _cleanup(self) -> None:
@@ -214,8 +249,6 @@ def _run_command(command: Sequence[str], timeout: float | None) -> None:
     except subprocess.TimeoutExpired as error:
         raise VoiceProcessingTimeout from error
     except OSError as error:
-        raise VoiceRuntimeError(f"Cannot start voice command: {error}") from error
+        raise VoiceRuntimeError("Voice command could not start.") from error
     if result.returncode != 0:
-        detail = result.stderr.strip()
-        message = f"Voice command exited with status {result.returncode}"
-        raise VoiceRuntimeError(f"{message}: {detail}" if detail else message)
+        raise VoiceRuntimeError("Voice command failed.")

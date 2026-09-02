@@ -16,6 +16,7 @@ from snack_gpt.__main__ import run
 from snack_gpt.auth import verify_password
 from snack_gpt.storage import Storage
 from snack_gpt.voice import VoiceProcessingError
+from snack_gpt.voice_runtime import VoiceManifest
 
 
 class CliTests(unittest.TestCase):
@@ -31,7 +32,8 @@ class CliTests(unittest.TestCase):
             with patch.dict(os.environ, environment, clear=True), patch(
                 "snack_gpt.__main__.load_dotenv"
             ), patch(
-                "snack_gpt.__main__.load_voice_commands", return_value={}
+                "snack_gpt.__main__.load_voice_manifest",
+                return_value=VoiceManifest({}, Path(directory)),
             ), patch(
                 "snack_gpt.__main__.CommandVoiceRuntime", return_value=object()
             ), patch(
@@ -57,7 +59,8 @@ class CliTests(unittest.TestCase):
             with patch.dict(os.environ, environment, clear=True), patch(
                 "snack_gpt.__main__.load_dotenv"
             ), patch(
-                "snack_gpt.__main__.load_voice_commands", return_value={}
+                "snack_gpt.__main__.load_voice_manifest",
+                return_value=VoiceManifest({}, Path(directory)),
             ) as load_commands, patch(
                 "snack_gpt.__main__.CommandVoiceRuntime", return_value=runtime
             ), patch(
