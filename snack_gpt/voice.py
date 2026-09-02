@@ -13,7 +13,7 @@ from snack_gpt.ingestion import (
     UsdaSearch,
     create_consumption_report,
 )
-from snack_gpt.storage import ConsumptionEvent, Storage
+from snack_gpt.storage import ConsumptionEvent, Storage, VoiceStatus
 from snack_gpt.usda import UsdaError
 
 
@@ -32,6 +32,10 @@ class VoiceProcessingTimeout(Exception):
 
 
 class VoiceProcessingError(Exception):
+    pass
+
+
+class VoiceListeningPaused(Exception):
     pass
 
 
@@ -140,13 +144,16 @@ def create_consumption_report_from_voice(
     *,
     monotonic: Callable[[], float] = time.monotonic,
     timer: Callable[[], float] = time.monotonic,
+    state_changed: Callable[[VoiceStatus, bool | None], None] | None = None,
 ) -> list[ConsumptionEvent] | None:
+    notify = state_changed or (lambda status, usda_available: None)
     operation_id = str(uuid4())
     stage = "capture"
     stage_started = timer()
     try:
         capture = runtime.wait_for_wake_and_capture()
     except VoiceProcessingTimeout:
+        notify(VoiceStatus.AUDIO_UNAVAILABLE, None)
         _log_stage(operation_id, stage, stage_started, timer(), "failure", "timeout")
         deadline = monotonic() + VOICE_PROCESSING_TIMEOUT_SECONDS
         feedback_started = timer()
@@ -154,6 +161,7 @@ def create_consumption_report_from_voice(
         _log_stage(operation_id, "feedback", feedback_started, timer(), "success")
         return None
     except VoiceProcessingError as error:
+        notify(VoiceStatus.AUDIO_UNAVAILABLE, None)
         _log_stage(operation_id, stage, stage_started, timer(), "failure", "audio_unavailable")
         deadline = monotonic() + VOICE_PROCESSING_TIMEOUT_SECONDS
         feedback_started = timer()
@@ -161,6 +169,7 @@ def create_consumption_report_from_voice(
         _log_stage(operation_id, "feedback", feedback_started, timer(), "success")
         return None
     utterance_id = capture.utterance_id
+    notify(VoiceStatus.PROCESSING, None)
     _log_stage(utterance_id, stage, stage_started, timer(), "success")
     final_deadline = monotonic() + VOICE_PROCESSING_TIMEOUT_SECONDS
     processing_deadline = final_deadline - VOICE_FEEDBACK_TIMEOUT_SECONDS
@@ -190,12 +199,29 @@ def create_consumption_report_from_voice(
         )
         _log_stage(utterance_id, stage, stage_started, timer(), "success")
     except (VoiceProcessingTimeout, TimeoutError) as error:
+        if stage == "ingestion":
+            notify(VoiceStatus.USDA_UNAVAILABLE, False)
+        else:
+            notify(VoiceStatus.AUDIO_UNAVAILABLE, None)
         _log_stage(utterance_id, stage, stage_started, timer(), "failure", _failure_category(error))
         feedback_started = timer()
         runtime.report_failure("Processing took too long.", final_deadline)
         _log_stage(utterance_id, "feedback", feedback_started, timer(), "success")
         return None
-    except (ExtractionError, IngestionError, UsdaError, VoiceProcessingError) as error:
+    except UsdaError as error:
+        notify(VoiceStatus.USDA_UNAVAILABLE, False)
+        _log_stage(utterance_id, stage, stage_started, timer(), "failure", _failure_category(error))
+        feedback_started = timer()
+        runtime.report_failure(str(error), final_deadline)
+        _log_stage(utterance_id, "feedback", feedback_started, timer(), "success")
+        return None
+    except (ExtractionError, IngestionError, VoiceProcessingError) as error:
+        status = (
+            VoiceStatus.AUDIO_UNAVAILABLE
+            if isinstance(error, VoiceProcessingError)
+            else VoiceStatus.LISTENING
+        )
+        notify(status, None)
         _log_stage(utterance_id, stage, stage_started, timer(), "failure", _failure_category(error))
         feedback_started = timer()
         runtime.report_failure(str(error), final_deadline)
@@ -203,9 +229,11 @@ def create_consumption_report_from_voice(
         return None
     feedback_started = timer()
     if not events:
+        notify(VoiceStatus.LISTENING, True)
         runtime.report_failure("This Consumption Report was already recorded.", final_deadline)
         _log_stage(utterance_id, "feedback", feedback_started, timer(), "duplicate")
         return None
+    notify(VoiceStatus.LISTENING, True)
     runtime.report_success(events, final_deadline)
     _log_stage(utterance_id, "feedback", feedback_started, timer(), "success")
     return events
@@ -218,6 +246,7 @@ def create_consumption_event_from_voice(
     *,
     monotonic: Callable[[], float] = time.monotonic,
     timer: Callable[[], float] = time.monotonic,
+    state_changed: Callable[[VoiceStatus, bool | None], None] | None = None,
 ) -> ConsumptionEvent | None:
     events = create_consumption_report_from_voice(
         storage,
@@ -225,6 +254,7 @@ def create_consumption_event_from_voice(
         runtime,
         monotonic=monotonic,
         timer=timer,
+        state_changed=state_changed,
     )
     return events[0] if events else None
 

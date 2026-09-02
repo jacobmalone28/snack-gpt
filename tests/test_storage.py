@@ -5,10 +5,45 @@ import tempfile
 import unittest
 
 from snack_gpt.auth import hash_password, session_token_hash, verify_password
-from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
+from snack_gpt.storage import (
+    ConsumptionEvent,
+    NutritionSnapshot,
+    Storage,
+    VoiceState,
+    VoiceStatus,
+)
 
 
 class StorageTests(unittest.TestCase):
+    def test_voice_control_and_status_are_shared_between_connections(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "snack-gpt.sqlite3"
+            with Storage(database_path) as listener_storage:
+                listener_storage.initialize()
+                self.assertEqual(
+                    listener_storage.voice_state(),
+                    VoiceState(False, VoiceStatus.CONFIGURATION_ERROR, True),
+                )
+
+                with Storage(database_path) as web_storage:
+                    paused = web_storage.set_voice_paused(True)
+
+                self.assertEqual(paused, VoiceState(True, VoiceStatus.PAUSED, True))
+                self.assertEqual(listener_storage.voice_state(), paused)
+                listener_storage.set_voice_status(
+                    VoiceStatus.USDA_UNAVAILABLE, usda_available=False
+                )
+
+                with Storage(database_path) as refreshed_web_storage:
+                    self.assertEqual(
+                        refreshed_web_storage.voice_state(),
+                        VoiceState(True, VoiceStatus.PAUSED, False),
+                    )
+                    self.assertEqual(
+                        refreshed_web_storage.set_voice_paused(False),
+                        VoiceState(False, VoiceStatus.USDA_UNAVAILABLE, False),
+                    )
+
     def test_password_reset_stores_only_a_hash_and_revokes_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "snack-gpt.sqlite3"
@@ -129,7 +164,7 @@ class StorageTests(unittest.TestCase):
                 restarted_storage.initialize()
                 restarted_health = restarted_storage.health()
 
-            self.assertEqual(first_health.schema_version, 4)
+            self.assertEqual(first_health.schema_version, 5)
             self.assertTrue(first_health.writable)
             self.assertEqual(restarted_health, first_health)
 

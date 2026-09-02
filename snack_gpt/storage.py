@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 from pathlib import Path
 import sqlite3
 from types import TracebackType
@@ -10,6 +11,22 @@ from typing import Self, Sequence
 class StorageHealth:
     schema_version: int
     writable: bool
+
+
+class VoiceStatus(StrEnum):
+    LISTENING = "listening"
+    PAUSED = "paused"
+    PROCESSING = "processing"
+    USDA_UNAVAILABLE = "usda_unavailable"
+    AUDIO_UNAVAILABLE = "audio_unavailable"
+    CONFIGURATION_ERROR = "configuration_error"
+
+
+@dataclass(frozen=True)
+class VoiceState:
+    paused: bool
+    status: VoiceStatus
+    usda_available: bool
 
 
 @dataclass(frozen=True)
@@ -110,6 +127,70 @@ class Storage:
             self._connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version) VALUES (4)"
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS voice_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    paused INTEGER NOT NULL CHECK (paused IN (0, 1)),
+                    status TEXT NOT NULL,
+                    usda_available INTEGER NOT NULL CHECK (usda_available IN (0, 1))
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO voice_state (singleton, paused, status, usda_available)
+                VALUES (1, 0, 'configuration_error', 1)
+                """
+            )
+            self._connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version) VALUES (5)"
+            )
+
+    def voice_state(self) -> VoiceState:
+        row = self._connection.execute(
+            "SELECT paused, status, usda_available FROM voice_state WHERE singleton = 1"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Storage is not initialized")
+        paused = bool(row[0])
+        status = VoiceStatus.PAUSED if paused else VoiceStatus(str(row[1]))
+        return VoiceState(paused, status, bool(row[2]))
+
+    def set_voice_paused(self, paused: bool) -> VoiceState:
+        with self._connection:
+            self._connection.execute(
+                "UPDATE voice_state SET paused = ? WHERE singleton = 1",
+                (paused,),
+            )
+        return self.voice_state()
+
+    def set_voice_status(
+        self, status: VoiceStatus, *, usda_available: bool | None = None
+    ) -> VoiceState:
+        with self._connection:
+            if usda_available is None:
+                self._connection.execute(
+                    "UPDATE voice_state SET status = ? WHERE singleton = 1",
+                    (status.value,),
+                )
+            else:
+                self._connection.execute(
+                    """
+                    UPDATE voice_state SET status = ?, usda_available = ?
+                    WHERE singleton = 1
+                    """,
+                    (status.value, usda_available),
+                )
+        return self.voice_state()
+
+    def set_usda_available(self, available: bool) -> VoiceState:
+        with self._connection:
+            self._connection.execute(
+                "UPDATE voice_state SET usda_available = ? WHERE singleton = 1",
+                (available,),
+            )
+        return self.voice_state()
 
     def set_owner_password_hash(self, password_hash: str) -> None:
         with self._connection:

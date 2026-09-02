@@ -4,6 +4,7 @@ import sys
 from collections.abc import Sequence
 from getpass import getpass
 import logging
+import time
 from wsgiref.simple_server import make_server
 
 from dotenv import load_dotenv
@@ -11,9 +12,13 @@ from dotenv import load_dotenv
 from snack_gpt.auth import hash_password
 from snack_gpt.config import ConfigurationError, Settings
 from snack_gpt.http import create_application
-from snack_gpt.storage import Storage
+from snack_gpt.storage import Storage, VoiceStatus
 from snack_gpt.usda import FoodDataCentralSearch
-from snack_gpt.voice import VoiceProcessingError, create_consumption_report_from_voice
+from snack_gpt.voice import (
+    VoiceListeningPaused,
+    VoiceProcessingError,
+    create_consumption_report_from_voice,
+)
 from snack_gpt.voice_runtime import CommandVoiceRuntime, VoiceRuntimeError, load_voice_manifest
 
 
@@ -59,26 +64,53 @@ def run(arguments: Sequence[str]) -> int:
 
     if command == ("listen",):
         logging.basicConfig(level=logging.INFO)
-        if settings.usda_api_key is None:
-            print("Configuration error: USDA_FDC_API_KEY is required for voice reports", file=sys.stderr)
-            return 2
-        if settings.voice_manifest_path is None:
-            print("Configuration error: SNACK_GPT_VOICE_MANIFEST is required for listening", file=sys.stderr)
-            return 2
-        try:
-            manifest = load_voice_manifest(settings.voice_manifest_path)
-            runtime = CommandVoiceRuntime(manifest.commands, manifest.memory_directory)
-        except VoiceRuntimeError as error:
-            print(f"Configuration error: {error}", file=sys.stderr)
-            return 2
-        usda_search = FoodDataCentralSearch(settings.usda_api_key)
         with Storage(settings.database_path) as storage:
             storage.initialize()
+            if settings.usda_api_key is None:
+                storage.set_voice_status(
+                    VoiceStatus.CONFIGURATION_ERROR, usda_available=False
+                )
+                print("Configuration error: USDA_FDC_API_KEY is required for voice reports", file=sys.stderr)
+                return 2
+            if settings.voice_manifest_path is None:
+                storage.set_voice_status(VoiceStatus.CONFIGURATION_ERROR)
+                print("Configuration error: SNACK_GPT_VOICE_MANIFEST is required for listening", file=sys.stderr)
+                return 2
+            try:
+                manifest = load_voice_manifest(settings.voice_manifest_path)
+                runtime = CommandVoiceRuntime(
+                    manifest.commands,
+                    manifest.memory_directory,
+                    listening_allowed=lambda: not storage.voice_state().paused,
+                )
+            except VoiceRuntimeError as error:
+                storage.set_voice_status(VoiceStatus.CONFIGURATION_ERROR)
+                print(f"Configuration error: {error}", file=sys.stderr)
+                return 2
+            usda_search = FoodDataCentralSearch(settings.usda_api_key)
+            storage.set_voice_status(VoiceStatus.LISTENING)
+
+            def state_changed(
+                status: VoiceStatus, usda_available: bool | None
+            ) -> None:
+                storage.set_voice_status(status, usda_available=usda_available)
+
             try:
                 while True:
+                    if storage.voice_state().paused:
+                        time.sleep(0.1)
+                        continue
                     try:
-                        create_consumption_report_from_voice(storage, usda_search, runtime)
+                        create_consumption_report_from_voice(
+                            storage,
+                            usda_search,
+                            runtime,
+                            state_changed=state_changed,
+                        )
+                    except VoiceListeningPaused:
+                        continue
                     except VoiceProcessingError:
+                        storage.set_voice_status(VoiceStatus.AUDIO_UNAVAILABLE)
                         print("Voice feedback failed; resuming listening.", file=sys.stderr)
             except KeyboardInterrupt:
                 return 0

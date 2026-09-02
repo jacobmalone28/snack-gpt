@@ -6,13 +6,15 @@ import tempfile
 import unittest
 
 from snack_gpt.ingestion import FoodSearchResult
-from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
+from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage, VoiceStatus
 from snack_gpt.voice import (
     CapturedSpeech,
+    VoiceListeningPaused,
     VoiceProcessingTimeout,
     create_consumption_event_from_voice,
     create_consumption_report_from_voice,
 )
+from snack_gpt.usda import UsdaError
 from snack_gpt.voice_runtime import CommandVoiceRuntime, VoiceRuntimeError, load_voice_manifest
 from snack_gpt.voice_runtime import _run_command
 
@@ -56,6 +58,17 @@ class TimingOutUsdaSearch(ControlledUsdaSearch):
     ) -> list[FoodSearchResult]:
         super().search(query, timeout_seconds=timeout_seconds)
         raise TimeoutError
+
+
+class UnavailableUsdaSearch(ControlledUsdaSearch):
+    def search(
+        self,
+        query: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> list[FoodSearchResult]:
+        super().search(query, timeout_seconds=timeout_seconds)
+        raise UsdaError("USDA unavailable")
 
 
 class ControlledVoiceRuntime:
@@ -321,6 +334,52 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(usda_search.queries, ["egg", "egg"])
         self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "success"])
 
+    def test_voice_report_publishes_processing_and_usda_recovery(self) -> None:
+        states: list[tuple[VoiceStatus, bool | None]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+                create_consumption_report_from_voice(
+                    storage,
+                    ControlledUsdaSearch([COMPLETE_RESULT]),
+                    ControlledVoiceRuntime(),
+                    monotonic=lambda: 100.0,
+                    state_changed=lambda status, available: states.append(
+                        (status, available)
+                    ),
+                )
+
+        self.assertEqual(
+            states,
+            [
+                (VoiceStatus.PROCESSING, None),
+                (VoiceStatus.LISTENING, True),
+            ],
+        )
+
+    def test_voice_report_publishes_usda_unavailable(self) -> None:
+        states: list[tuple[VoiceStatus, bool | None]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+                create_consumption_report_from_voice(
+                    storage,
+                    UnavailableUsdaSearch([]),
+                    ControlledVoiceRuntime(),
+                    monotonic=lambda: 100.0,
+                    state_changed=lambda status, available: states.append(
+                        (status, available)
+                    ),
+                )
+
+        self.assertEqual(
+            states,
+            [
+                (VoiceStatus.PROCESSING, None),
+                (VoiceStatus.USDA_UNAVAILABLE, False),
+            ],
+        )
+
     def test_capture_timeout_reports_standard_reason(self) -> None:
         runtime = CaptureTimingOutRuntime()
         usda_search = ControlledUsdaSearch([COMPLETE_RESULT])
@@ -409,6 +468,22 @@ class VoiceTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(not path.exists() for path in controlled_commands.paths))
+
+    def test_command_runtime_observes_pause_between_wake_capture_chunks(self) -> None:
+        controlled_commands = ControlledCommands()
+        allowed = iter((True, False))
+        with tempfile.TemporaryDirectory() as memory_directory:
+            runtime = CommandVoiceRuntime(
+                COMMANDS,
+                Path(memory_directory),
+                run_command=controlled_commands.run,
+                listening_allowed=lambda: next(allowed),
+            )
+
+            with self.assertRaises(VoiceListeningPaused):
+                runtime.wait_for_wake_and_capture()
+
+        self.assertEqual(controlled_commands.names, ["wake-capture"])
 
     def test_command_runtime_and_coordinator_create_event(self) -> None:
         self._run_integrated_voice_report(ControlledCommands(), [COMPLETE_RESULT], expect_event=True)
@@ -550,6 +625,7 @@ class VoiceTests(unittest.TestCase):
     def test_usda_timeout_creates_no_event_and_reports_before_final_deadline(self) -> None:
         runtime = ControlledVoiceRuntime()
         usda_search = TimingOutUsdaSearch([])
+        states: list[tuple[VoiceStatus, bool | None]] = []
         with tempfile.TemporaryDirectory() as directory:
             with Storage(Path(directory) / "events.sqlite3") as storage:
                 storage.initialize()
@@ -559,6 +635,9 @@ class VoiceTests(unittest.TestCase):
                     usda_search,
                     runtime,
                     monotonic=lambda: 100.0,
+                    state_changed=lambda status, available: states.append(
+                        (status, available)
+                    ),
                 )
 
                 self.assertIsNone(event)
@@ -567,6 +646,7 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(usda_search.queries, ["egg"])
         self.assertEqual(runtime.failure_reason, "Processing took too long.")
         self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "failure"])
+        self.assertEqual(states[-1], (VoiceStatus.USDA_UNAVAILABLE, False))
 
 
 if __name__ == "__main__":

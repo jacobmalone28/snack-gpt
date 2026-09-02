@@ -76,6 +76,14 @@ Start the continuous listener with:
 python3 -m snack_gpt listen
 ```
 
+Run `serve` and `listen` with the same `SNACK_GPT_DATABASE`. The web interface
+shows listening, paused, processing, USDA unavailable, audio unavailable, or
+configuration error without exposing voice content or runtime details. Its
+pause and resume control is shared with the listener and remains effective
+across browser refreshes and process restarts. During a USDA outage, creation
+and food or Food Quantity corrections are disabled; history, totals, date-only
+correction, deletion, export, and import remain available.
+
 Wake detection pauses while each report is transcribed, extracted, sent to
 USDA, stored, and acknowledged. Speech capture is stopped after 15 seconds and
 processing shares a 30-second deadline. Audio, transcripts, extractions, and

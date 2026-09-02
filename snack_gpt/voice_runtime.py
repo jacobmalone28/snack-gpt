@@ -11,7 +11,12 @@ import time
 from typing import cast
 
 from snack_gpt.storage import ConsumptionEvent
-from snack_gpt.voice import CapturedSpeech, VoiceProcessingError, VoiceProcessingTimeout
+from snack_gpt.voice import (
+    CapturedSpeech,
+    VoiceListeningPaused,
+    VoiceProcessingError,
+    VoiceProcessingTimeout,
+)
 
 
 CAPTURE_TIMEOUT_SECONDS = 15.0
@@ -82,18 +87,22 @@ class CommandVoiceRuntime:
         run_command: RunCommand | None = None,
         today: Callable[[], date] = date.today,
         monotonic: Callable[[], float] = time.monotonic,
+        listening_allowed: Callable[[], bool] = lambda: True,
     ) -> None:
         self._commands = commands
         self._memory_directory = memory_directory
         self._run_command = run_command or _run_command
         self._today = today
         self._monotonic = monotonic
+        self._listening_allowed = listening_allowed
         self._artifacts: tempfile.TemporaryDirectory[str] | None = None
         self._extraction: object | None = None
 
     def wait_for_wake_and_capture(self) -> CapturedSpeech:
         self._cleanup()
         while True:
+            if not self._listening_allowed():
+                raise VoiceListeningPaused
             with tempfile.TemporaryDirectory(
                 prefix="snack-gpt-wake-",
                 dir=self._memory_directory,
@@ -102,6 +111,8 @@ class CommandVoiceRuntime:
                 wake_audio = root / "wake.wav"
                 wake_result = root / "wake.json"
                 self._run("wake_capture", {"audio": str(wake_audio)})
+                if not self._listening_allowed():
+                    raise VoiceListeningPaused
                 self._run(
                     "wake_detection",
                     {"audio": str(wake_audio), "output": str(wake_result)},
