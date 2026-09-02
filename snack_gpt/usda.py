@@ -1,6 +1,7 @@
 from collections.abc import Callable, Mapping
 import json
 import re
+import time
 from typing import cast
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -8,19 +9,27 @@ from urllib.request import urlopen
 from snack_gpt.ingestion import FoodSearchResult
 
 
-FetchJson = Callable[[str, dict[str, str]], object]
+FetchJson = Callable[[str, dict[str, str], float], object]
 
 
 class FoodDataCentralSearch:
-    def __init__(self, api_key: str, fetch_json: FetchJson | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        fetch_json: FetchJson | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._api_key = api_key
         self._fetch_json = fetch_json or _fetch_json
+        self._monotonic = monotonic
 
-    def search(self, query: str) -> list[FoodSearchResult]:
+    def search(self, query: str, *, timeout_seconds: float | None = None) -> list[FoodSearchResult]:
+        deadline = self._monotonic() + (timeout_seconds if timeout_seconds is not None else 15.0)
         response = _as_mapping(
             self._fetch_json(
                 "/foods/search",
                 {"api_key": self._api_key, "query": query, "pageSize": "25"},
+                self._remaining_seconds(deadline),
             )
         )
         if response is None:
@@ -38,13 +47,21 @@ class FoodDataCentralSearch:
                 continue
             details = _as_mapping(
                 self._fetch_json(
-                    f"/food/{food_id}", {"api_key": self._api_key}
+                    f"/food/{food_id}",
+                    {"api_key": self._api_key},
+                    self._remaining_seconds(deadline),
                 )
             )
             result = _food_search_result(details)
             if result is not None:
                 return [result]
         return []
+
+    def _remaining_seconds(self, deadline: float) -> float:
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            raise TimeoutError("USDA search deadline expired")
+        return remaining
 
 
 def _food_search_result(
@@ -145,8 +162,8 @@ def _as_list(value: object) -> list[object] | None:
     return cast(list[object], value)
 
 
-def _fetch_json(path: str, parameters: dict[str, str]) -> object:
+def _fetch_json(path: str, parameters: dict[str, str], timeout_seconds: float) -> object:
     url = f"https://api.nal.usda.gov/fdc/v1{path}?{urlencode(parameters)}"
-    with urlopen(url, timeout=15) as response:
+    with urlopen(url, timeout=timeout_seconds) as response:
         result: object = json.load(response)
     return result

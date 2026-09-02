@@ -29,6 +29,24 @@ python3 -m snack_gpt serve
 
 Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available at <http://127.0.0.1:8000/health>.
 
+## Listen for voice reports
+
+Set `SNACK_GPT_VOICE_MANIFEST` to a JSON manifest containing local command
+arrays named `wake_capture`, `wake_detection`, `speech_capture`,
+`transcription`, `extraction`, `success_sound`, `error_sound`,
+`speech_synthesis`, and `play_speech`. Commands use `{audio}`, `{output}`,
+`{transcript}`, or `{text}` placeholders as appropriate. They are executed
+directly without a shell. Start the continuous listener with:
+
+```console
+python3 -m snack_gpt listen
+```
+
+Wake detection pauses while each report is transcribed, extracted, sent to
+USDA, stored, and acknowledged. Speech capture is stopped after 15 seconds and
+processing shares a 30-second deadline. Temporary audio, transcripts,
+extractions, and synthesized feedback are removed after every report.
+
 ## Optional LAN access
 
 Snack-GPT listens only on `127.0.0.1` by default. To make it available on a
@@ -60,6 +78,7 @@ reports the conflict and preserves the local Consumption Event.
 | `SNACK_GPT_HOST` | `127.0.0.1` | Web server bind address; non-loopback values enable required authentication |
 | `SNACK_GPT_PORT` | `8000` | Web server port |
 | `USDA_FDC_API_KEY` | none | USDA FoodData Central API key required to create Consumption Events |
+| `SNACK_GPT_VOICE_MANIFEST` | none | JSON command manifest used by `snack-gpt listen` |
 
 Invalid values fail before the database or server is opened. Keep the default host unless LAN access has been configured and secured.
 Values exported in the shell take precedence over values in `.env`. The `.env` file is ignored by Git; use `.env.example` as the checked-in template.

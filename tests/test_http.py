@@ -23,7 +23,12 @@ class ControlledUsdaSearch:
     def __init__(self) -> None:
         self.queries: list[str] = []
 
-    def search(self, query: str) -> list[FoodSearchResult]:
+    def search(
+        self,
+        query: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> list[FoodSearchResult]:
         self.queries.append(query)
         if query != "egg":
             return []

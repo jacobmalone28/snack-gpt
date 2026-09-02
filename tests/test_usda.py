@@ -4,6 +4,32 @@ from snack_gpt.usda import FoodDataCentralSearch
 
 
 class FoodDataCentralSearchTests(unittest.TestCase):
+    def test_search_requests_share_one_timeout_budget(self) -> None:
+        responses: dict[str, object] = {
+            "/foods/search": {"foods": [{"fdcId": 20}]},
+            "/food/20": {
+                "fdcId": 20,
+                "description": "Egg",
+                "foodNutrients": [],
+            },
+        }
+        request_timeouts: list[float] = []
+        times = iter((100.0, 100.0, 110.0))
+
+        def fetch_json(path: str, parameters: dict[str, str], timeout_seconds: float) -> object:
+            request_timeouts.append(timeout_seconds)
+            return responses[path]
+
+        search = FoodDataCentralSearch(
+            "secret",
+            fetch_json=fetch_json,
+            monotonic=lambda: next(times),
+        )
+
+        search.search("egg", timeout_seconds=15.0)
+
+        self.assertEqual(request_timeouts, [15.0, 5.0])
+
     def test_returns_the_highest_ranked_complete_food(self) -> None:
         responses: dict[str, object] = {
             "/foods/search": {"foods": [{"fdcId": 10}, {"fdcId": 20}]},
@@ -35,8 +61,9 @@ class FoodDataCentralSearchTests(unittest.TestCase):
             },
         }
 
-        def fetch_json(path: str, parameters: dict[str, str]) -> object:
+        def fetch_json(path: str, parameters: dict[str, str], timeout_seconds: float) -> object:
             self.assertEqual(parameters["api_key"], "secret")
+            self.assertGreater(timeout_seconds, 0)
             if path == "/foods/search":
                 self.assertEqual(parameters["query"], "egg")
             return responses[path]

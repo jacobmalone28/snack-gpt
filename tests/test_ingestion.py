@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from snack_gpt.ingestion import (
     ConsumptionReportItem,
@@ -49,12 +50,38 @@ class ControlledUsdaSearch:
         self._results = results
         self.queries: list[str] = []
 
-    def search(self, query: str) -> list[FoodSearchResult]:
+    def search(
+        self,
+        query: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> list[FoodSearchResult]:
         self.queries.append(query)
         return self._results
 
 
 class IngestionTests(unittest.TestCase):
+    def test_expired_deadline_after_usda_lookup_creates_no_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+                usda_search = ControlledUsdaSearch([COMPLETE_RESULT])
+                times = iter((100.0, 100.0, 121.0))
+
+                with patch("snack_gpt.ingestion.time.monotonic", side_effect=times):
+                    with self.assertRaises(TimeoutError):
+                        create_consumption_event(
+                            storage,
+                            usda_search,
+                            food="egg",
+                            quantity="1",
+                            measure="large",
+                            day="2026-08-25",
+                            timeout_seconds=20.0,
+                        )
+
+                self.assertEqual(storage.list_consumption_events(), [])
+
     def test_food_correction_replaces_the_usda_result_and_nutrition_snapshot(self) -> None:
         original = ConsumptionEvent(
             event_id="event-id",

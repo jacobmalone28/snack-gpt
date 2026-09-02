@@ -15,9 +15,66 @@ from snack_gpt.config import Settings
 from snack_gpt.__main__ import run
 from snack_gpt.auth import verify_password
 from snack_gpt.storage import Storage
+from snack_gpt.voice import VoiceProcessingError
 
 
 class CliTests(unittest.TestCase):
+    def test_listen_resumes_after_feedback_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "voice.json"
+            environment = {
+                "SNACK_GPT_DATABASE": str(Path(directory) / "snack-gpt.sqlite3"),
+                "SNACK_GPT_VOICE_MANIFEST": str(manifest_path),
+                "USDA_FDC_API_KEY": "test-key",
+            }
+            stderr = StringIO()
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "snack_gpt.__main__.load_dotenv"
+            ), patch(
+                "snack_gpt.__main__.load_voice_commands", return_value={}
+            ), patch(
+                "snack_gpt.__main__.CommandVoiceRuntime", return_value=object()
+            ), patch(
+                "snack_gpt.__main__.create_consumption_event_from_voice",
+                side_effect=[VoiceProcessingError("private runtime detail"), KeyboardInterrupt],
+            ) as create_from_voice, patch("sys.stderr", stderr):
+                result = run(["listen"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(create_from_voice.call_count, 2)
+        self.assertEqual(stderr.getvalue(), "Voice feedback failed; resuming listening.\n")
+
+    def test_listen_runs_voice_reports_until_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "snack-gpt.sqlite3"
+            manifest_path = Path(directory) / "voice.json"
+            environment = {
+                "SNACK_GPT_DATABASE": str(database_path),
+                "SNACK_GPT_VOICE_MANIFEST": str(manifest_path),
+                "USDA_FDC_API_KEY": "test-key",
+            }
+            runtime = object()
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "snack_gpt.__main__.load_dotenv"
+            ), patch(
+                "snack_gpt.__main__.load_voice_commands", return_value={}
+            ) as load_commands, patch(
+                "snack_gpt.__main__.CommandVoiceRuntime", return_value=runtime
+            ), patch(
+                "snack_gpt.__main__.create_consumption_event_from_voice",
+                side_effect=KeyboardInterrupt,
+            ) as create_from_voice:
+                result = run(["listen"])
+
+            with Storage(database_path) as storage:
+                health = storage.health()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(health.schema_version, 3)
+        load_commands.assert_called_once_with(manifest_path)
+        self.assertEqual(create_from_voice.call_count, 1)
+        self.assertIs(create_from_voice.call_args.args[2], runtime)
+
     def test_set_password_initializes_and_resets_owner_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "snack-gpt.sqlite3"
