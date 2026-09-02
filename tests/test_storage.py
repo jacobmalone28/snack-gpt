@@ -28,7 +28,9 @@ class StorageTests(unittest.TestCase):
                 with Storage(database_path) as web_storage:
                     paused = web_storage.set_voice_paused(True)
 
-                self.assertEqual(paused, VoiceState(True, VoiceStatus.PAUSED, True))
+                self.assertEqual(
+                    paused, VoiceState(True, VoiceStatus.CONFIGURATION_ERROR, True)
+                )
                 self.assertEqual(listener_storage.voice_state(), paused)
                 listener_storage.set_voice_status(
                     VoiceStatus.USDA_UNAVAILABLE, usda_available=False
@@ -37,12 +39,15 @@ class StorageTests(unittest.TestCase):
                 with Storage(database_path) as refreshed_web_storage:
                     self.assertEqual(
                         refreshed_web_storage.voice_state(),
-                        VoiceState(True, VoiceStatus.PAUSED, False),
+                        VoiceState(True, VoiceStatus.USDA_UNAVAILABLE, False),
                     )
                     self.assertEqual(
                         refreshed_web_storage.set_voice_paused(False),
                         VoiceState(False, VoiceStatus.USDA_UNAVAILABLE, False),
                     )
+
+                with self.assertRaisesRegex(ValueError, "controlled separately"):
+                    listener_storage.set_voice_status(VoiceStatus.PAUSED)
 
     def test_password_reset_stores_only_a_hash_and_revokes_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

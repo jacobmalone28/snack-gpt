@@ -212,7 +212,7 @@ def create_consumption_report_from_voice(
         notify(VoiceStatus.USDA_UNAVAILABLE, False)
         _log_stage(utterance_id, stage, stage_started, timer(), "failure", _failure_category(error))
         feedback_started = timer()
-        runtime.report_failure(str(error), final_deadline)
+        runtime.report_failure("USDA food search is unavailable.", final_deadline)
         _log_stage(utterance_id, "feedback", feedback_started, timer(), "success")
         return None
     except (ExtractionError, IngestionError, VoiceProcessingError) as error:

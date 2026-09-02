@@ -68,7 +68,7 @@ class UnavailableUsdaSearch(ControlledUsdaSearch):
         timeout_seconds: float | None = None,
     ) -> list[FoodSearchResult]:
         super().search(query, timeout_seconds=timeout_seconds)
-        raise UsdaError("USDA unavailable")
+        raise UsdaError("private upstream detail")
 
 
 class ControlledVoiceRuntime:
@@ -359,13 +359,14 @@ class VoiceTests(unittest.TestCase):
 
     def test_voice_report_publishes_usda_unavailable(self) -> None:
         states: list[tuple[VoiceStatus, bool | None]] = []
+        runtime = ControlledVoiceRuntime()
         with tempfile.TemporaryDirectory() as directory:
             with Storage(Path(directory) / "events.sqlite3") as storage:
                 storage.initialize()
                 create_consumption_report_from_voice(
                     storage,
                     UnavailableUsdaSearch([]),
-                    ControlledVoiceRuntime(),
+                    runtime,
                     monotonic=lambda: 100.0,
                     state_changed=lambda status, available: states.append(
                         (status, available)
@@ -379,6 +380,8 @@ class VoiceTests(unittest.TestCase):
                 (VoiceStatus.USDA_UNAVAILABLE, False),
             ],
         )
+        self.assertEqual(runtime.failure_reason, "USDA food search is unavailable.")
+        self.assertNotIn("private upstream detail", runtime.failure_reason)
 
     def test_capture_timeout_reports_standard_reason(self) -> None:
         runtime = CaptureTimingOutRuntime()

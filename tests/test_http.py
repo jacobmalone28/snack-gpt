@@ -142,12 +142,21 @@ class HttpTests(unittest.TestCase):
                 },
             )
             _, _, refreshed_body = request_application(application, "GET", "/")
+            retry_status, retry_headers, _ = request_application(
+                application, "POST", "/usda/retry"
+            )
+            _, _, retried_body = request_application(application, "GET", "/")
 
         self.assertEqual(status, "503 Service Unavailable")
         self.assertEqual(body, "USDA food search is unavailable.\n")
         self.assertNotIn("private upstream detail", body)
         self.assertIn(">USDA unavailable</dd>", refreshed_body)
         self.assertIn('type="submit" disabled', refreshed_body)
+        self.assertIn('action="/usda/retry"', refreshed_body)
+        self.assertEqual(retry_status, "303 See Other")
+        self.assertEqual(dict(retry_headers)["Location"], "/")
+        self.assertNotIn('action="/usda/retry"', retried_body)
+        self.assertNotIn('type="submit" disabled', retried_body)
 
     def test_voice_controls_and_public_states_persist_across_refreshes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -314,6 +323,9 @@ class HttpTests(unittest.TestCase):
             denied_voice_status, _, _ = request_application(
                 application, "POST", "/voice/pause"
             )
+            denied_usda_retry_status, _, _ = request_application(
+                application, "POST", "/usda/retry"
+            )
             malformed_cookie_status, _, _ = request_application(
                 application,
                 "GET",
@@ -353,6 +365,7 @@ class HttpTests(unittest.TestCase):
 
         self.assertEqual(denied_status, "401 Unauthorized")
         self.assertEqual(denied_voice_status, "401 Unauthorized")
+        self.assertEqual(denied_usda_retry_status, "401 Unauthorized")
         self.assertNotIn("schema_version", denied_body)
         self.assertEqual(malformed_cookie_status, "401 Unauthorized")
         self.assertEqual(failed_status, "401 Unauthorized")

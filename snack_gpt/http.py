@@ -143,6 +143,11 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                 storage.set_voice_paused(path == "/voice/pause")
             return _see_other_response(start_response, "/")
 
+        if path == "/usda/retry" and method == "POST":
+            with Storage(settings.database_path) as storage:
+                storage.retry_usda()
+            return _see_other_response(start_response, "/")
+
         if path == "/consumption-events/export" and method == "GET":
             with Storage(settings.database_path) as storage:
                 document = export_history(storage)
@@ -349,6 +354,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
             )
             for offset in range(7)
         )
+        public_voice_status = VoiceStatus.PAUSED if voice_state.paused else voice_state.status
         voice_status = {
             VoiceStatus.LISTENING: "Listening",
             VoiceStatus.PAUSED: "Paused",
@@ -356,10 +362,16 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
             VoiceStatus.USDA_UNAVAILABLE: "USDA unavailable",
             VoiceStatus.AUDIO_UNAVAILABLE: "Audio unavailable",
             VoiceStatus.CONFIGURATION_ERROR: "Configuration error",
-        }[voice_state.status]
+        }[public_voice_status]
         voice_action = "/voice/resume" if voice_state.paused else "/voice/pause"
         voice_action_label = "Resume listening" if voice_state.paused else "Pause listening"
         disabled = "" if usda_available else " disabled"
+        usda_retry_form = (
+            '<form action="/usda/retry" method="post">'
+            '<button class="secondary" type="submit">Retry USDA</button></form>'
+            if configured_usda_search is not None and not voice_state.usda_available
+            else ""
+        )
         logout_form = (
             '<form action="/logout" method="post"><button type="submit">Log out</button></form>'
             if settings.authentication_required
@@ -410,11 +422,12 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
       <dt>Application</dt><dd class="ready">Application ready</dd>
       <dt>Storage</dt><dd>{escape(storage_status)}</dd>
       <dt>Database</dt><dd>Schema {health.schema_version}</dd>
-            <dt>Voice</dt><dd class="{'ready' if voice_state.status == VoiceStatus.LISTENING else 'unavailable'}">{voice_status}</dd>
+            <dt>Voice</dt><dd class="{'ready' if public_voice_status == VoiceStatus.LISTENING else 'unavailable'}">{voice_status}</dd>
     </dl>
                 <form action="{voice_action}" method="post">
                         <button class="secondary" type="submit">{voice_action_label}</button>
                 </form>
+                {usda_retry_form}
         <section>
             <h2>Calendar Week: {_date_label(selected_week)} - {_date_label(selected_week + timedelta(days=6))}</h2>
             <nav>{previous_link}{current_link}{next_link}</nav>

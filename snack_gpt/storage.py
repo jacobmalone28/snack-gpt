@@ -132,7 +132,7 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS voice_state (
                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                     paused INTEGER NOT NULL CHECK (paused IN (0, 1)),
-                    status TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status != 'paused'),
                     usda_available INTEGER NOT NULL CHECK (usda_available IN (0, 1))
                 )
                 """
@@ -153,9 +153,7 @@ class Storage:
         ).fetchone()
         if row is None:
             raise RuntimeError("Storage is not initialized")
-        paused = bool(row[0])
-        status = VoiceStatus.PAUSED if paused else VoiceStatus(str(row[1]))
-        return VoiceState(paused, status, bool(row[2]))
+        return VoiceState(bool(row[0]), VoiceStatus(str(row[1])), bool(row[2]))
 
     def set_voice_paused(self, paused: bool) -> VoiceState:
         with self._connection:
@@ -168,6 +166,8 @@ class Storage:
     def set_voice_status(
         self, status: VoiceStatus, *, usda_available: bool | None = None
     ) -> VoiceState:
+        if status == VoiceStatus.PAUSED:
+            raise ValueError("Pause is controlled separately from runtime status")
         with self._connection:
             if usda_available is None:
                 self._connection.execute(
@@ -189,6 +189,16 @@ class Storage:
             self._connection.execute(
                 "UPDATE voice_state SET usda_available = ? WHERE singleton = 1",
                 (available,),
+            )
+        return self.voice_state()
+
+    def retry_usda(self) -> VoiceState:
+        with self._connection:
+            self._connection.execute(
+                """
+                UPDATE voice_state SET status = 'listening', usda_available = 1
+                WHERE singleton = 1
+                """
             )
         return self.voice_state()
 
