@@ -16,7 +16,13 @@ from snack_gpt.auth import hash_password
 from snack_gpt.config import ConfigurationError, Settings
 from snack_gpt.http import Application, create_application
 from snack_gpt.ingestion import FoodSearchResult
-from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
+from snack_gpt.storage import (
+    ConsumptionEvent,
+    NutritionSnapshot,
+    Storage,
+    VoiceStatus,
+)
+from snack_gpt.usda import UsdaError
 
 
 class ControlledUsdaSearch:
@@ -45,6 +51,17 @@ class ControlledUsdaSearch:
                 measures={"large": 50.0},
             )
         ]
+
+
+class UnavailableUsdaSearch(ControlledUsdaSearch):
+    def search(
+        self,
+        query: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> list[FoodSearchResult]:
+        self.queries.append(query)
+        raise UsdaError("private upstream detail")
 
 
 def post_form(
@@ -102,6 +119,179 @@ def request_application(
 
 
 class HttpTests(unittest.TestCase):
+    def test_web_usda_failure_persists_a_generic_degraded_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.set_voice_status(VoiceStatus.LISTENING)
+            application = create_application(settings, UnavailableUsdaSearch())
+
+            status, body = post_form(
+                application,
+                "/consumption-events",
+                {
+                    "food": "egg",
+                    "quantity": "1",
+                    "measure": "large",
+                    "day": date.today().isoformat(),
+                },
+            )
+            _, _, refreshed_body = request_application(application, "GET", "/")
+            retry_status, retry_headers, _ = request_application(
+                application, "POST", "/usda/retry"
+            )
+            _, _, retried_body = request_application(application, "GET", "/")
+
+        self.assertEqual(status, "503 Service Unavailable")
+        self.assertEqual(body, "USDA food search is unavailable.\n")
+        self.assertNotIn("private upstream detail", body)
+        self.assertIn(">USDA unavailable</dd>", refreshed_body)
+        self.assertIn('type="submit" disabled', refreshed_body)
+        self.assertIn('action="/usda/retry"', refreshed_body)
+        self.assertEqual(retry_status, "303 See Other")
+        self.assertEqual(dict(retry_headers)["Location"], "/")
+        self.assertNotIn('action="/usda/retry"', retried_body)
+        self.assertNotIn('type="submit" disabled', retried_body)
+
+    def test_voice_controls_and_public_states_persist_across_refreshes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.set_voice_status(VoiceStatus.LISTENING)
+            application = create_application(settings, ControlledUsdaSearch())
+
+            for status, label in (
+                (VoiceStatus.LISTENING, "Listening"),
+                (VoiceStatus.PROCESSING, "Processing"),
+                (VoiceStatus.USDA_UNAVAILABLE, "USDA unavailable"),
+                (VoiceStatus.AUDIO_UNAVAILABLE, "Audio unavailable"),
+                (VoiceStatus.CONFIGURATION_ERROR, "Configuration error"),
+            ):
+                with self.subTest(status=status):
+                    with Storage(settings.database_path) as storage:
+                        storage.set_voice_status(status)
+                    _, _, body = request_application(application, "GET", "/")
+                    self.assertIn(f">{label}</dd>", body)
+                    self.assertNotIn("transcript", body.lower())
+                    self.assertNotIn("credential", body.lower())
+
+            pause_status, pause_headers, _ = request_application(
+                application, "POST", "/voice/pause"
+            )
+            refreshed_application = create_application(
+                settings, ControlledUsdaSearch()
+            )
+            _, _, paused_body = request_application(
+                refreshed_application, "GET", "/"
+            )
+            resume_status, resume_headers, _ = request_application(
+                refreshed_application, "POST", "/voice/resume"
+            )
+
+        self.assertEqual(pause_status, "303 See Other")
+        self.assertEqual(dict(pause_headers)["Location"], "/")
+        self.assertIn(">Paused</dd>", paused_body)
+        self.assertIn('action="/voice/resume"', paused_body)
+        self.assertEqual(resume_status, "303 See Other")
+        self.assertEqual(dict(resume_headers)["Location"], "/")
+
+    def test_usda_outage_disables_dependent_changes_but_preserves_history_actions(self) -> None:
+        event_day = date.today()
+        corrected_day = event_day - timedelta(days=1)
+        event = ConsumptionEvent(
+            event_id="event-id",
+            revision=1,
+            day=event_day,
+            usda_food_id="171287",
+            food_description="Egg, whole, raw, fresh",
+            quantity_value=2,
+            quantity_measure="large",
+            nutrition=NutritionSnapshot(143, 12.6, 0.72, 9.51),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.create_consumption_event(event)
+                storage.set_voice_status(
+                    VoiceStatus.USDA_UNAVAILABLE, usda_available=False
+                )
+            usda_search = ControlledUsdaSearch()
+            application = create_application(settings, usda_search)
+
+            _, _, home_body = request_application(application, "GET", "/")
+            create_status, create_body = post_form(
+                application,
+                "/consumption-events",
+                {
+                    "food": "egg",
+                    "quantity": "1",
+                    "measure": "large",
+                    "day": event_day.isoformat(),
+                },
+            )
+            food_status, _ = post_form(
+                application,
+                "/consumption-events/correct",
+                {
+                    "event_id": event.event_id,
+                    "revision": "1",
+                    "food": "toast",
+                    "quantity": "2",
+                    "measure": "large",
+                    "day": event_day.isoformat(),
+                },
+            )
+            date_status, _ = post_form(
+                application,
+                "/consumption-events/correct",
+                {
+                    "event_id": event.event_id,
+                    "revision": "1",
+                    "food": event.food_description,
+                    "quantity": "2",
+                    "measure": "large",
+                    "day": corrected_day.isoformat(),
+                },
+            )
+            export_status, _, _ = request_application(
+                application, "GET", "/consumption-events/export"
+            )
+            delete_status, _ = post_form(
+                application,
+                "/consumption-events/delete",
+                {
+                    "event_id": event.event_id,
+                    "revision": "2",
+                    "confirmed": "yes",
+                },
+            )
+
+        self.assertIn(">USDA unavailable</dd>", home_body)
+        self.assertIn(" readonly", home_body)
+        self.assertIn('type="submit" disabled', home_body)
+        self.assertEqual(create_status, "503 Service Unavailable")
+        self.assertIn("unavailable", create_body)
+        self.assertEqual(food_status, "422 Unprocessable Entity")
+        self.assertEqual(date_status, "200 OK")
+        self.assertEqual(export_status, "200 OK")
+        self.assertEqual(delete_status, "200 OK")
+        self.assertEqual(usda_search.queries, [])
+
     def test_lan_application_requires_configured_owner_password(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings = Settings(
@@ -130,6 +320,12 @@ class HttpTests(unittest.TestCase):
             denied_status, _, denied_body = request_application(
                 application, "GET", "/health"
             )
+            denied_voice_status, _, _ = request_application(
+                application, "POST", "/voice/pause"
+            )
+            denied_usda_retry_status, _, _ = request_application(
+                application, "POST", "/usda/retry"
+            )
             malformed_cookie_status, _, _ = request_application(
                 application,
                 "GET",
@@ -151,6 +347,9 @@ class HttpTests(unittest.TestCase):
             health_status, health_headers, health_body = request_application(
                 application, "GET", "/health", cookie=cookie
             )
+            voice_status, _, _ = request_application(
+                application, "POST", "/voice/pause", cookie=cookie
+            )
             home_status, home_headers, _ = request_application(
                 application, "GET", "/", cookie=cookie
             )
@@ -165,6 +364,8 @@ class HttpTests(unittest.TestCase):
             )
 
         self.assertEqual(denied_status, "401 Unauthorized")
+        self.assertEqual(denied_voice_status, "401 Unauthorized")
+        self.assertEqual(denied_usda_retry_status, "401 Unauthorized")
         self.assertNotIn("schema_version", denied_body)
         self.assertEqual(malformed_cookie_status, "401 Unauthorized")
         self.assertEqual(failed_status, "401 Unauthorized")
@@ -175,6 +376,7 @@ class HttpTests(unittest.TestCase):
         self.assertIn("HttpOnly", set_cookie)
         self.assertIn("SameSite=Strict", set_cookie)
         self.assertEqual(health_status, "200 OK")
+        self.assertEqual(voice_status, "303 See Other")
         self.assertIn('"storage":"healthy"', health_body)
         self.assertEqual(dict(health_headers)["Cache-Control"], "no-store")
         self.assertEqual(home_status, "200 OK")
@@ -690,7 +892,7 @@ class HttpTests(unittest.TestCase):
             self.assertIn("<h1>Snack-GPT</h1>", body)
             self.assertIn("Application ready", body)
             self.assertIn("Storage healthy", body)
-            self.assertIn("Schema 4", body)
+            self.assertIn("Schema 5", body)
             self.assertIn('action="/consumption-events"', body)
             self.assertIn('name="food"', body)
             self.assertIn('name="quantity"', body)
@@ -731,7 +933,7 @@ class HttpTests(unittest.TestCase):
                 {
                     "application": "ready",
                     "storage": "healthy",
-                    "schema_version": 4,
+                    "schema_version": 5,
                 },
             )
 

@@ -20,8 +20,8 @@ from snack_gpt.ingestion import (
     correct_consumption_event,
     create_consumption_report,
 )
-from snack_gpt.storage import ConsumptionEvent, Storage
-from snack_gpt.usda import FoodDataCentralSearch
+from snack_gpt.storage import ConsumptionEvent, Storage, VoiceStatus
+from snack_gpt.usda import FoodDataCentralSearch, UsdaError
 
 
 StartResponse: TypeAlias = Callable[[str, list[tuple[str, str]]], object]
@@ -138,6 +138,16 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                     f"{_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
                 )
 
+        if path in {"/voice/pause", "/voice/resume"} and method == "POST":
+            with Storage(settings.database_path) as storage:
+                storage.set_voice_paused(path == "/voice/pause")
+            return _see_other_response(start_response, "/")
+
+        if path == "/usda/retry" and method == "POST":
+            with Storage(settings.database_path) as storage:
+                storage.retry_usda()
+            return _see_other_response(start_response, "/")
+
         if path == "/consumption-events/export" and method == "GET":
             with Storage(settings.database_path) as storage:
                 document = export_history(storage)
@@ -188,9 +198,14 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                 expected_revision = _form_revision(form)
                 with Storage(settings.database_path) as storage:
                     if path == "/consumption-events/correct":
+                        usda_search_for_correction = (
+                            configured_usda_search
+                            if storage.voice_state().usda_available
+                            else None
+                        )
                         event = correct_consumption_event(
                             storage,
-                            configured_usda_search,
+                            usda_search_for_correction,
                             event_id=event_id,
                             expected_revision=expected_revision,
                             food=_form_value(form, "food"),
@@ -210,6 +225,16 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                             )
             except ConsumptionEventConflict as error:
                 return _plain_response(start_response, "409 Conflict", f"{error}\n")
+            except UsdaError:
+                with Storage(settings.database_path) as storage:
+                    storage.set_voice_status(
+                        VoiceStatus.USDA_UNAVAILABLE, usda_available=False
+                    )
+                return _plain_response(
+                    start_response,
+                    "503 Service Unavailable",
+                    "USDA food search is unavailable.\n",
+                )
             except IngestionError as error:
                 return _plain_response(
                     start_response, "422 Unprocessable Entity", f"{error}\n"
@@ -226,11 +251,13 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
             )
 
         if path == "/consumption-events" and method == "POST":
-            if configured_usda_search is None:
+            with Storage(settings.database_path) as storage:
+                usda_available = storage.voice_state().usda_available
+            if configured_usda_search is None or not usda_available:
                 return _plain_response(
                     start_response,
                     "503 Service Unavailable",
-                    "USDA food search is not configured.\n",
+                    "USDA food search is unavailable.\n",
                 )
             request_body = _request_body(environment)
             form = parse_qs(request_body.decode("utf-8"), keep_blank_values=True)
@@ -243,6 +270,17 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                         items=items,
                         day=_form_value(form, "day"),
                     )
+                    storage.set_usda_available(True)
+            except UsdaError:
+                with Storage(settings.database_path) as storage:
+                    storage.set_voice_status(
+                        VoiceStatus.USDA_UNAVAILABLE, usda_available=False
+                    )
+                return _plain_response(
+                    start_response,
+                    "503 Service Unavailable",
+                    "USDA food search is unavailable.\n",
+                )
             except IngestionError as error:
                 return _plain_response(start_response, "422 Unprocessable Entity", f"{error}\n")
             if len(events) == 1:
@@ -265,6 +303,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
 
         with Storage(settings.database_path) as storage:
             health = storage.health()
+            voice_state = storage.voice_state()
             current_week = _calendar_week_start(date.today())
             requested_week = _query_value(environment, "week")
             selected_week = _calendar_week_start(_parse_date(requested_week, date.today()))
@@ -308,9 +347,30 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
             if selected_week < current_week
             else ""
         )
+        usda_available = configured_usda_search is not None and voice_state.usda_available
         days = "".join(
-            _render_day(selected_week + timedelta(days=offset), events)
+            _render_day(
+                selected_week + timedelta(days=offset), events, usda_available
+            )
             for offset in range(7)
+        )
+        public_voice_status = VoiceStatus.PAUSED if voice_state.paused else voice_state.status
+        voice_status = {
+            VoiceStatus.LISTENING: "Listening",
+            VoiceStatus.PAUSED: "Paused",
+            VoiceStatus.PROCESSING: "Processing",
+            VoiceStatus.USDA_UNAVAILABLE: "USDA unavailable",
+            VoiceStatus.AUDIO_UNAVAILABLE: "Audio unavailable",
+            VoiceStatus.CONFIGURATION_ERROR: "Configuration error",
+        }[public_voice_status]
+        voice_action = "/voice/resume" if voice_state.paused else "/voice/pause"
+        voice_action_label = "Resume listening" if voice_state.paused else "Pause listening"
+        disabled = "" if usda_available else " disabled"
+        usda_retry_form = (
+            '<form action="/usda/retry" method="post">'
+            '<button class="secondary" type="submit">Retry USDA</button></form>'
+            if configured_usda_search is not None and not voice_state.usda_available
+            else ""
         )
         logout_form = (
             '<form action="/logout" method="post"><button type="submit">Log out</button></form>'
@@ -331,6 +391,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
     dl {{ display: grid; grid-template-columns: 1fr auto; gap: 0.75rem 2rem; border-block: 1px solid #a8a396; padding: 1.25rem 0; }}
     dt {{ font-weight: 700; }} dd {{ margin: 0; }}
     .ready {{ color: #17653a; }}
+    .unavailable {{ color: #a33a22; }}
     form {{ display: grid; gap: 1rem; margin-top: 2rem; }}
     fieldset {{ border: 0; margin: 0; padding: 0; }}
     legend {{ font-size: 1.25rem; font-weight: 700; margin-bottom: 1rem; }}
@@ -361,7 +422,12 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
       <dt>Application</dt><dd class="ready">Application ready</dd>
       <dt>Storage</dt><dd>{escape(storage_status)}</dd>
       <dt>Database</dt><dd>Schema {health.schema_version}</dd>
+            <dt>Voice</dt><dd class="{'ready' if public_voice_status == VoiceStatus.LISTENING else 'unavailable'}">{voice_status}</dd>
     </dl>
+                <form action="{voice_action}" method="post">
+                        <button class="secondary" type="submit">{voice_action_label}</button>
+                </form>
+                {usda_retry_form}
         <section>
             <h2>Calendar Week: {_date_label(selected_week)} - {_date_label(selected_week + timedelta(days=6))}</h2>
             <nav>{previous_link}{current_link}{next_link}</nav>
@@ -388,15 +454,15 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                 <legend>Consumption Report</legend>
                 <div id="report-items">
                     <div class="report-item">
-                        <label>Food <input name="food" type="search" required></label>
-                        <label>Quantity <input name="quantity" type="number" min="0.01" step="any" required></label>
-                        <label>Measure <input name="measure" value="grams" required></label>
+                        <label>Food <input name="food" type="search" required{disabled}></label>
+                        <label>Quantity <input name="quantity" type="number" min="0.01" step="any" required{disabled}></label>
+                        <label>Measure <input name="measure" value="grams" required{disabled}></label>
                     </div>
                 </div>
-                <button class="secondary" id="add-food" type="button">Add food</button>
+                <button class="secondary" id="add-food" type="button"{disabled}>Add food</button>
             </fieldset>
             <label>Day <input name="day" type="date" value="{date.today().isoformat()}" max="{date.today().isoformat()}" required></label>
-            <button type="submit">Create Consumption Report</button>
+            <button type="submit"{disabled}>Create Consumption Report</button>
         </form>
         <template id="report-item-template">
             <div class="report-item">
@@ -506,6 +572,16 @@ def _redirect_response(
     return [b""]
 
 
+def _see_other_response(
+    start_response: StartResponse, location: str
+) -> Iterable[bytes]:
+    start_response(
+        "303 See Other",
+        [("Location", location), ("Content-Length", "0")],
+    )
+    return [b""]
+
+
 def _session_token(environment: dict[str, object]) -> str | None:
     cookies = SimpleCookie()
     try:
@@ -610,17 +686,20 @@ def _nutrition_totals(events: list[ConsumptionEvent]) -> tuple[float, float, flo
     return calories, protein, carbohydrates, fat
 
 
-def _render_day(day: date, events: list[ConsumptionEvent]) -> str:
+def _render_day(
+    day: date, events: list[ConsumptionEvent], usda_available: bool
+) -> str:
     day_events = [event for event in events if event.day == day]
+    food_correction_attribute = "" if usda_available else " readonly"
     event_markup = "".join(
         f'<li class="event"><strong>{escape(event.food_description)}</strong>: '
         f"{event.quantity_value:g} {escape(event.quantity_measure)}"
         f'<form class="event-edit" action="/consumption-events/correct" method="post">'
         f'<input name="event_id" type="hidden" value="{escape(event.event_id)}">'
         f'<input name="revision" type="hidden" value="{event.revision}">'
-        f'<label>Food <input name="food" type="search" value="{escape(event.food_description)}" required></label>'
-        f'<label>Quantity <input name="quantity" type="number" min="0.01" step="any" value="{event.quantity_value:g}" required></label>'
-        f'<label>Measure <input name="measure" value="{escape(event.quantity_measure)}" required></label>'
+        f'<label>Food <input name="food" type="search" value="{escape(event.food_description)}" required{food_correction_attribute}></label>'
+        f'<label>Quantity <input name="quantity" type="number" min="0.01" step="any" value="{event.quantity_value:g}" required{food_correction_attribute}></label>'
+        f'<label>Measure <input name="measure" value="{escape(event.quantity_measure)}" required{food_correction_attribute}></label>'
         f'<label>Day <input name="day" type="date" value="{event.day.isoformat()}" max="{date.today().isoformat()}" required></label>'
         f'<button type="submit">Save</button></form>'
         f'<form class="event-delete" action="/consumption-events/delete" method="post" '

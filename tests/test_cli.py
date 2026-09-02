@@ -73,7 +73,7 @@ class CliTests(unittest.TestCase):
                 health = storage.health()
 
         self.assertEqual(result, 0)
-        self.assertEqual(health.schema_version, 4)
+        self.assertEqual(health.schema_version, 5)
         load_commands.assert_called_once_with(manifest_path)
         self.assertEqual(create_from_voice.call_count, 1)
         self.assertIs(create_from_voice.call_args.args[2], runtime)
@@ -202,7 +202,7 @@ class CliTests(unittest.TestCase):
             )
 
             self.assertEqual(first_result.returncode, 0)
-            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 4)\n")
+            self.assertEqual(first_result.stdout, "Snack-GPT is healthy (schema 5)\n")
             self.assertEqual(second_result.returncode, 0)
             self.assertEqual(second_result.stdout, first_result.stdout)
             self.assertTrue(database_path.is_file())
