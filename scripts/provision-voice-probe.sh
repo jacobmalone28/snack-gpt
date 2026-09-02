@@ -2,6 +2,8 @@
 set -euo pipefail
 
 PREFIX=/opt/snack-gpt
+CONFIG_DIRECTORY=/etc/snack-gpt
+STATE_DIRECTORY=/var/lib/snack-gpt
 OPENWAKEWORD_VERSION=0.6.0
 NEEDLE_VERSION=2.0.10
 PIPER_VERSION=1.7.0
@@ -80,7 +82,7 @@ echo "Installing system packages..."
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     alsa-utils bubblewrap build-essential ca-certificates cmake curl git \
-    libopenblas-dev python3 python3-pip python3-venv
+    libopenblas-dev python3 python3-pip python3-venv sox libsox-fmt-alsa
 if [[ -z $FIXTURE_SOURCE && -z $CAPTURE_DEVICE ]]; then
     mapfile -t CAPTURE_DEVICES < <(
         LC_ALL=C arecord --list-devices 2>/dev/null |
@@ -198,6 +200,11 @@ write_adapter "$BIN/whisper-probe" transcribe
 write_adapter "$BIN/needle-probe" extract
 write_adapter "$BIN/piper-probe" synthesize
 write_adapter "$BIN/piper-worker" piper-worker
+cat >"$BIN/voice-audio" <<EOF
+#!/bin/sh
+exec "$PYTHON" -m snack_gpt.voice_audio "\$@"
+EOF
+chmod 0755 "$BIN/voice-audio"
 cat >"$BIN/piper" <<EOF
 #!/bin/sh
 exec "$PYTHON" -m piper "\$@"
@@ -233,7 +240,104 @@ if details != (1, 2, 16000):
 PY
 
 chmod -R a+rX "$PREFIX"
+
+echo "Installing Snack-GPT application configuration..."
+install -d -m 0755 "$CONFIG_DIRECTORY" "$STATE_DIRECTORY"
+cat >"$CONFIG_DIRECTORY/voice.json" <<EOF
+{
+    "memory_directory": "/dev/shm",
+    "commands": {
+        "wake_capture": ["$BIN/voice-audio", "capture", "--mode", "wake", "--output", "{audio}"],
+        "wake_detection": ["$BIN/openwakeword-probe", "--model", "$MODELS/hey_jarvis_v0.1.onnx", "--audio", "{audio}", "--output", "{output}"],
+        "speech_capture": ["$BIN/voice-audio", "capture", "--mode", "speech", "--silence-seconds", "{silence_seconds}", "--output", "{audio}"],
+        "transcription": ["$BIN/whisper-probe", "--binary", "$BIN/whisper-cli", "--binary-argument=-ac", "--binary-argument=512", "--model", "$MODELS/ggml-tiny.en.bin", "--audio", "{audio}", "--output", "{output}"],
+        "extraction": ["$BIN/needle-probe", "--library", "$LIB/libneedle.so", "--transcript", "{transcript}", "--output", "{output}"],
+        "success_sound": ["$BIN/voice-audio", "tone", "success"],
+        "error_sound": ["$BIN/voice-audio", "tone", "error"],
+        "speech_synthesis": ["$BIN/piper-probe", "--socket", "/run/snack-gpt/piper.sock", "--text", "{text}", "--output", "{output}"],
+        "play_speech": ["$BIN/voice-audio", "play", "{audio}"]
+    }
+}
+EOF
+cat >"$CONFIG_DIRECTORY/environment" <<EOF
+SNACK_GPT_DATABASE=$STATE_DIRECTORY/snack-gpt.sqlite3
+SNACK_GPT_HOST=127.0.0.1
+SNACK_GPT_PORT=8000
+SNACK_GPT_VOICE_MANIFEST=$CONFIG_DIRECTORY/voice.json
+# USDA_FDC_API_KEY=
+# SNACK_GPT_MICROPHONE=
+# SNACK_GPT_SPEAKER=
+EOF
+SERVICE_USER=${SUDO_USER:-}
+[[ -n $SERVICE_USER && $SERVICE_USER != root ]] || {
+        echo "Run with sudo from the unprivileged account that will operate Snack-GPT." >&2
+        exit 1
+}
+id "$SERVICE_USER" >/dev/null 2>&1 || {
+    echo "Service user does not exist: $SERVICE_USER" >&2
+    exit 1
+}
+chown root:"$SERVICE_USER" "$CONFIG_DIRECTORY/environment"
+chmod 0640 "$CONFIG_DIRECTORY/environment"
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$STATE_DIRECTORY"
+
+cat >/etc/systemd/system/snack-gpt-web.service <<EOF
+[Unit]
+Description=Snack-GPT web application
+After=network.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+EnvironmentFile=$CONFIG_DIRECTORY/environment
+ExecStart=$PYTHON -m snack_gpt serve
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/systemd/system/snack-gpt-piper.service <<EOF
+[Unit]
+Description=Snack-GPT speech synthesis worker
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+RuntimeDirectory=snack-gpt
+ExecStart=$BIN/piper-worker --model $MODELS/en_US-lessac-low.onnx --socket /run/snack-gpt/piper.sock
+ExecStartPost=/bin/sh -c 'attempt=0; while [ ! -S /run/snack-gpt/piper.sock ] && [ "\$attempt" -lt 300 ]; do attempt=\$((attempt + 1)); sleep 0.1; done; [ -S /run/snack-gpt/piper.sock ]'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/systemd/system/snack-gpt-listener.service <<EOF
+[Unit]
+Description=Snack-GPT voice listener
+After=network.target snack-gpt-piper.service
+Requires=snack-gpt-piper.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+EnvironmentFile=$CONFIG_DIRECTORY/environment
+ExecStart=$PYTHON -m snack_gpt listen
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl disable snack-gpt-web.service snack-gpt-piper.service snack-gpt-listener.service
 echo
-echo "Provisioning complete. Run the acceptance probe as an unprivileged user:"
+echo "Provisioning complete. Services are installed disabled."
+echo "As $SERVICE_USER, verify audio before enabling them:"
+echo "  $BIN/voice-audio check"
+echo "Then run the acceptance probe:"
 echo "  cd $REPOSITORY_ROOT"
 echo "  $PYTHON -m snack_gpt.voice_probe docs/voice-probe.pi.json --output voice-probe-results.json"

@@ -130,6 +130,11 @@ Values exported in the shell take precedence over values in `.env`. The `.env` f
 
 ## Raspberry Pi voice acceptance
 
-The reproducible on-device procedure and manifest are in
-[`docs/voice-probe.md`](docs/voice-probe.md). The probe runs all local inference
-stages without network access and records their timings and peak memory.
+Cross-platform launch and model paths are documented in
+[`docs/installation.md`](docs/installation.md). The reproducible Pi inference
+probe and complete appliance acceptance procedure are in
+[`docs/voice-probe.md`](docs/voice-probe.md) and
+[`docs/raspberry-pi-acceptance.md`](docs/raspberry-pi-acceptance.md). The probe
+runs all local inference stages without network access and records their timings
+and peak memory; physical appliance acceptance additionally verifies audio,
+wake reliability, web workflows, degraded states, and restart persistence.
