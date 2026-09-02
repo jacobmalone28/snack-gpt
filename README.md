@@ -42,8 +42,8 @@ Then set `SNACK_GPT_HOST=0.0.0.0` (or a specific LAN address) and run the
 server. Every web route, including health and history export, requires login in
 LAN mode. Passwords are stored as scrypt hashes. Browser sessions use random,
 revocable `HttpOnly`, `SameSite=Strict` cookies; HTTPS requests also receive the
-`Secure` flag. Running `set-password` again changes the password and signs out
-all existing sessions.
+`Secure` flag. Failed logins receive per-client progressive backoff. Running
+`set-password` again changes the password and signs out all existing sessions.
 
 ## Back up history
 

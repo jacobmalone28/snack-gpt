@@ -5,6 +5,7 @@ import json
 import tempfile
 from threading import Thread
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -71,6 +72,7 @@ def request_application(
     path: str,
     values: dict[str, str] | None = None,
     cookie: str | None = None,
+    remote_address: str = "127.0.0.1",
 ) -> tuple[str, list[tuple[str, str]], str]:
     body = urlencode(values or {}).encode()
     responses: list[tuple[str, list[tuple[str, str]]]] = []
@@ -84,6 +86,7 @@ def request_application(
         "REQUEST_METHOD": method,
         "CONTENT_LENGTH": str(len(body)),
         "CONTENT_TYPE": "application/x-www-form-urlencoded",
+        "REMOTE_ADDR": remote_address,
         "wsgi.input": BytesIO(body),
     }
     if cookie is not None:
@@ -128,16 +131,26 @@ class HttpTests(unittest.TestCase):
                 "/health",
                 cookie='snack_gpt_session="unterminated',
             )
-            failed_status, _, failed_body = request_application(
-                application, "POST", "/login", {"password": "incorrect"}
+            failed_status, failed_headers, failed_body = request_application(
+                application,
+                "POST",
+                "/login",
+                {"password": "incorrect"},
+                remote_address="192.0.2.10",
             )
             login_status, login_headers, _ = request_application(
                 application, "POST", "/login", {"password": "owner password"}
             )
             set_cookie = dict(login_headers)["Set-Cookie"]
             cookie = set_cookie.partition(";")[0]
-            health_status, _, health_body = request_application(
+            health_status, health_headers, health_body = request_application(
                 application, "GET", "/health", cookie=cookie
+            )
+            home_status, home_headers, _ = request_application(
+                application, "GET", "/", cookie=cookie
+            )
+            export_status, export_headers, _ = request_application(
+                application, "GET", "/consumption-events/export", cookie=cookie
             )
             logout_status, logout_headers, _ = request_application(
                 application, "POST", "/logout", cookie=cookie
@@ -150,6 +163,7 @@ class HttpTests(unittest.TestCase):
         self.assertNotIn("schema_version", denied_body)
         self.assertEqual(malformed_cookie_status, "401 Unauthorized")
         self.assertEqual(failed_status, "401 Unauthorized")
+        self.assertEqual(dict(failed_headers)["Cache-Control"], "no-store")
         self.assertIn("Login failed.", failed_body)
         self.assertNotIn("owner password", failed_body)
         self.assertEqual(login_status, "303 See Other")
@@ -157,9 +171,42 @@ class HttpTests(unittest.TestCase):
         self.assertIn("SameSite=Strict", set_cookie)
         self.assertEqual(health_status, "200 OK")
         self.assertIn('"storage":"healthy"', health_body)
+        self.assertEqual(dict(health_headers)["Cache-Control"], "no-store")
+        self.assertEqual(home_status, "200 OK")
+        self.assertEqual(dict(home_headers)["Cache-Control"], "no-store")
+        self.assertEqual(export_status, "200 OK")
+        self.assertEqual(dict(export_headers)["Cache-Control"], "no-store")
         self.assertEqual(logout_status, "303 See Other")
         self.assertIn("Max-Age=0", dict(logout_headers)["Set-Cookie"])
         self.assertEqual(revoked_status, "401 Unauthorized")
+
+    def test_lan_login_throttles_failures_before_repeating_scrypt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="0.0.0.0",
+                port=8000,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.set_owner_password_hash(hash_password("owner password"))
+            application = create_application(settings)
+
+            with patch("snack_gpt.http.time.monotonic", return_value=100), patch(
+                "snack_gpt.http.verify_password", return_value=False
+            ) as verify:
+                first_status, _, _ = request_application(
+                    application, "POST", "/login", {"password": "incorrect"}
+                )
+                blocked_status, blocked_headers, blocked_body = request_application(
+                    application, "POST", "/login", {"password": "incorrect"}
+                )
+
+        self.assertEqual(first_status, "401 Unauthorized")
+        self.assertEqual(blocked_status, "429 Too Many Requests")
+        self.assertEqual(dict(blocked_headers)["Retry-After"], "1")
+        self.assertIn("temporarily unavailable", blocked_body)
+        verify.assert_called_once()
 
     def test_owner_can_correct_a_consumption_event(self) -> None:
         original = ConsumptionEvent(

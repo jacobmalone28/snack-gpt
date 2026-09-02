@@ -3,6 +3,8 @@ from http.cookies import CookieError, SimpleCookie
 from datetime import date, timedelta
 from html import escape
 import json
+from math import ceil
+from threading import Lock
 import time
 from typing import BinaryIO, TypeAlias, cast
 from urllib.parse import parse_qs
@@ -26,9 +28,38 @@ StartResponse: TypeAlias = Callable[[str, list[tuple[str, str]]], object]
 Application: TypeAlias = Callable[[dict[str, object], StartResponse], Iterable[bytes]]
 _SESSION_COOKIE = "snack_gpt_session"
 _SESSION_DURATION_SECONDS = 12 * 60 * 60
+_MAX_LOGIN_BACKOFF_SECONDS = 60
+_LOGIN_ATTEMPT_WINDOW_SECONDS = 5 * 60
+
+
+class _LoginThrottle:
+    def __init__(self) -> None:
+        self._failures: dict[str, tuple[int, float, float]] = {}
+        self._lock = Lock()
+
+    def retry_after(self, client: str, now: float) -> int:
+        with self._lock:
+            attempt = self._failures.get(client)
+            if attempt is None:
+                return 0
+            _, blocked_until, _ = attempt
+            return max(0, ceil(blocked_until - now))
+
+    def record_failure(self, client: str, now: float) -> None:
+        with self._lock:
+            failure_count, _, last_failure = self._failures.get(client, (0, 0, 0))
+            if now - last_failure > _LOGIN_ATTEMPT_WINDOW_SECONDS:
+                failure_count = 0
+            backoff = min(2**failure_count, _MAX_LOGIN_BACKOFF_SECONDS)
+            self._failures[client] = (failure_count + 1, now + backoff, now)
+
+    def record_success(self, client: str) -> None:
+        with self._lock:
+            self._failures.pop(client, None)
 
 
 def create_application(settings: Settings, usda_search: UsdaSearch | None = None) -> Application:
+    login_throttle = _LoginThrottle()
     configured_usda_search = usda_search
     if configured_usda_search is None and settings.usda_api_key:
         configured_usda_search = FoodDataCentralSearch(settings.usda_api_key)
@@ -46,9 +77,20 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
         path = str(environment.get("PATH_INFO", "/"))
         method = str(environment.get("REQUEST_METHOD", "GET"))
         if settings.authentication_required:
+            start_response = _no_store(start_response)
             if path == "/login" and method == "GET":
                 return _login_response(start_response, "200 OK")
             if path == "/login" and method == "POST":
+                client = str(environment.get("REMOTE_ADDR", "unknown"))
+                now = time.monotonic()
+                retry_after = login_throttle.retry_after(client, now)
+                if retry_after:
+                    return _login_response(
+                        start_response,
+                        "429 Too Many Requests",
+                        "Login temporarily unavailable.",
+                        retry_after,
+                    )
                 form = parse_qs(
                     _request_body(environment).decode("utf-8"),
                     keep_blank_values=True,
@@ -58,6 +100,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                     if password_hash is None or not verify_password(
                         _form_value(form, "password"), password_hash
                     ):
+                        login_throttle.record_failure(client, now)
                         return _login_response(
                             start_response, "401 Unauthorized", "Login failed."
                         )
@@ -71,6 +114,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                         return _login_response(
                             start_response, "401 Unauthorized", "Login failed."
                         )
+                login_throttle.record_success(client)
                 return _redirect_response(
                     start_response,
                     "/",
@@ -413,7 +457,10 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
 
 
 def _login_response(
-    start_response: StartResponse, status: str, error: str = ""
+    start_response: StartResponse,
+    status: str,
+    error: str = "",
+    retry_after: int | None = None,
 ) -> Iterable[bytes]:
     error_markup = f'<p role="alert">{escape(error)}</p>' if error else ""
     body = f"""<!doctype html>
@@ -422,15 +469,26 @@ def _login_response(
 <body><main><h1>Snack-GPT</h1>{error_markup}<form action="/login" method="post"><label>Owner password <input name="password" type="password" required autocomplete="current-password"></label><button type="submit">Log in</button></form></main></body>
 </html>
 """.encode()
-    start_response(
-        status,
-        [
-            ("Content-Type", "text/html; charset=utf-8"),
-            ("Content-Length", str(len(body))),
-            ("Cache-Control", "no-store"),
-        ],
-    )
+    headers = [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-store"),
+    ]
+    if retry_after is not None:
+        headers.append(("Retry-After", str(retry_after)))
+    start_response(status, headers)
     return [body]
+
+
+def _no_store(start_response: StartResponse) -> StartResponse:
+    def no_store_response(status: str, headers: list[tuple[str, str]]) -> object:
+        uncached_headers = [
+            header for header in headers if header[0].lower() != "cache-control"
+        ]
+        uncached_headers.append(("Cache-Control", "no-store"))
+        return start_response(status, uncached_headers)
+
+    return no_store_response
 
 
 def _redirect_response(
