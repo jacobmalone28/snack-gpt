@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from io import BytesIO
 from pathlib import Path
 import json
 import tempfile
@@ -11,7 +12,7 @@ from uuid import UUID
 from wsgiref.simple_server import make_server
 
 from snack_gpt.config import Settings
-from snack_gpt.http import create_application
+from snack_gpt.http import Application, create_application
 from snack_gpt.ingestion import FoodSearchResult
 from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
 
@@ -39,7 +40,167 @@ class ControlledUsdaSearch:
         ]
 
 
+def post_form(
+    application: Application, path: str, values: dict[str, str]
+) -> tuple[str, str]:
+    body = urlencode(values).encode()
+    statuses: list[str] = []
+
+    def start_response(status: str, headers: list[tuple[str, str]]) -> object:
+        statuses.append(status)
+        return None
+
+    response = b"".join(
+        application(
+            {
+                "PATH_INFO": path,
+                "REQUEST_METHOD": "POST",
+                "CONTENT_LENGTH": str(len(body)),
+                "wsgi.input": BytesIO(body),
+            },
+            start_response,
+        )
+    ).decode()
+    return statuses[0], response
+
+
 class HttpTests(unittest.TestCase):
+    def test_owner_can_correct_a_consumption_event(self) -> None:
+        original = ConsumptionEvent(
+            event_id="event-id",
+            revision=1,
+            day=date(2026, 8, 25),
+            usda_food_id="171287",
+            food_description="Egg, whole, raw, fresh",
+            quantity_value=1,
+            quantity_measure="large",
+            nutrition=NutritionSnapshot(71.5, 6.3, 0.36, 4.755),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.create_consumption_event(original)
+            application = create_application(settings)
+
+            status, body = post_form(
+                application,
+                "/consumption-events/correct",
+                {
+                    "event_id": "event-id",
+                    "revision": "1",
+                    "food": original.food_description,
+                    "quantity": "1",
+                    "measure": "large",
+                    "day": "2026-08-26",
+                },
+            )
+
+            with Storage(settings.database_path) as storage:
+                corrected = storage.get_consumption_event("event-id")
+
+        self.assertEqual(status, "200 OK")
+        self.assertIn("Corrected Consumption Event", body)
+        self.assertIsNotNone(corrected)
+        assert corrected is not None
+        self.assertEqual(corrected.day, date(2026, 8, 26))
+        self.assertEqual(corrected.revision, 2)
+        self.assertEqual(corrected.nutrition, original.nutrition)
+
+    def test_failed_and_stale_corrections_preserve_the_current_event(self) -> None:
+        original = ConsumptionEvent(
+            event_id="event-id",
+            revision=2,
+            day=date(2026, 8, 25),
+            usda_food_id="171287",
+            food_description="Egg, whole, raw, fresh",
+            quantity_value=1,
+            quantity_measure="large",
+            nutrition=NutritionSnapshot(71.5, 6.3, 0.36, 4.755),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.create_consumption_event(original)
+            application = create_application(settings, ControlledUsdaSearch())
+            values = {
+                "event_id": "event-id",
+                "revision": "2",
+                "food": "unknown",
+                "quantity": "1",
+                "measure": "large",
+                "day": "2026-08-25",
+            }
+
+            failed_status, _ = post_form(
+                application, "/consumption-events/correct", values
+            )
+            values["revision"] = "1"
+            stale_status, _ = post_form(
+                application, "/consumption-events/correct", values
+            )
+
+            with Storage(settings.database_path) as storage:
+                current = storage.get_consumption_event("event-id")
+
+        self.assertEqual(failed_status, "422 Unprocessable Entity")
+        self.assertEqual(stale_status, "409 Conflict")
+        self.assertEqual(current, original)
+
+    def test_deletion_requires_confirmation_and_current_revision(self) -> None:
+        event = ConsumptionEvent(
+            event_id="event-id",
+            revision=1,
+            day=date(2026, 8, 25),
+            usda_food_id="171287",
+            food_description="Egg, whole, raw, fresh",
+            quantity_value=1,
+            quantity_measure="large",
+            nutrition=NutritionSnapshot(71.5, 6.3, 0.36, 4.755),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="127.0.0.1",
+                port=0,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.create_consumption_event(event)
+            application = create_application(settings)
+            path = "/consumption-events/delete"
+
+            unconfirmed_status, _ = post_form(
+                application, path, {"event_id": "event-id", "revision": "1"}
+            )
+            stale_status, _ = post_form(
+                application,
+                path,
+                {"event_id": "event-id", "revision": "2", "confirmed": "yes"},
+            )
+            deleted_status, _ = post_form(
+                application,
+                path,
+                {"event_id": "event-id", "revision": "1", "confirmed": "yes"},
+            )
+
+            with Storage(settings.database_path) as storage:
+                events = storage.list_consumption_events()
+
+        self.assertEqual(unconfirmed_status, "422 Unprocessable Entity")
+        self.assertEqual(stale_status, "409 Conflict")
+        self.assertEqual(deleted_status, "200 OK")
+        self.assertEqual(events, [])
+
     def test_owner_can_create_repeated_consumption_events_in_one_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings = Settings(
@@ -254,6 +415,10 @@ class HttpTests(unittest.TestCase):
             self.assertIn("Monday snack", body)
             self.assertIn("Sunday snack", body)
             self.assertNotIn("Previous snack", body)
+            self.assertIn('action="/consumption-events/correct"', body)
+            self.assertIn('name="revision" type="hidden" value="1"', body)
+            self.assertIn('action="/consumption-events/delete"', body)
+            self.assertIn("Remove this Consumption Event?", body)
             self.assertIn("Calories</dt><dd>200</dd>", body)
             self.assertIn("Protein</dt><dd>5.5 g</dd>", body)
             self.assertIn("Carbohydrates</dt><dd>8.5 g</dd>", body)

@@ -112,6 +112,53 @@ class Storage:
                 ],
             )
 
+    def update_consumption_event(
+        self, event: ConsumptionEvent, expected_revision: int
+    ) -> bool:
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE consumption_events
+                SET revision = ?, day = ?, usda_food_id = ?, food_description = ?,
+                    quantity_value = ?, quantity_measure = ?, calories = ?,
+                    protein = ?, carbohydrates = ?, fat = ?
+                WHERE event_id = ? AND revision = ?
+                """,
+                (
+                    event.revision,
+                    event.day.isoformat(),
+                    event.usda_food_id,
+                    event.food_description,
+                    event.quantity_value,
+                    event.quantity_measure,
+                    event.nutrition.calories,
+                    event.nutrition.protein,
+                    event.nutrition.carbohydrates,
+                    event.nutrition.fat,
+                    event.event_id,
+                    expected_revision,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def delete_consumption_event(self, event_id: str, expected_revision: int) -> bool:
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM consumption_events WHERE event_id = ? AND revision = ?",
+                (event_id, expected_revision),
+            )
+        return cursor.rowcount == 1
+
+    def get_consumption_event(self, event_id: str) -> ConsumptionEvent | None:
+        return next(
+            (
+                event
+                for event in self.list_consumption_events()
+                if event.event_id == event_id
+            ),
+            None,
+        )
+
     def list_consumption_events(self) -> list[ConsumptionEvent]:
         rows = self._connection.execute(
             """
