@@ -46,18 +46,36 @@ class VoiceAdapterTests(unittest.TestCase):
                 "confidence": 1,
             },
             "nonnumeric quantity": {
-                "foods": [{"food": "egg", "quantity": "one", "measure": "large"}]
+                "foods": [{"food": "egg", "quantity": "one", "measure": "large"}],
+                "confidence": 1,
             },
-            "zero quantity": {"foods": [{"food": "egg", "quantity": 0, "measure": "large"}]},
-            "negative quantity": {"foods": [{"food": "egg", "quantity": -1, "measure": "large"}]},
-            "nan quantity": {"foods": [{"food": "egg", "quantity": float("nan"), "measure": "large"}]},
+            "zero quantity": {
+                "foods": [{"food": "egg", "quantity": 0, "measure": "large"}],
+                "confidence": 1,
+            },
+            "negative quantity": {
+                "foods": [{"food": "egg", "quantity": -1, "measure": "large"}],
+                "confidence": 1,
+            },
+            "nan quantity": {
+                "foods": [{"food": "egg", "quantity": float("nan"), "measure": "large"}],
+                "confidence": 1,
+            },
             "infinite quantity": {
-                "foods": [{"food": "egg", "quantity": float("inf"), "measure": "large"}]
+                "foods": [{"food": "egg", "quantity": float("inf"), "measure": "large"}],
+                "confidence": 1,
             },
-            "missing measure": {"foods": [{"food": "egg", "quantity": 1}]},
-            "blank measure": {"foods": [{"food": "egg", "quantity": 1, "measure": " "}]},
+            "missing measure": {
+                "foods": [{"food": "egg", "quantity": 1}],
+                "confidence": 1,
+            },
+            "blank measure": {
+                "foods": [{"food": "egg", "quantity": 1, "measure": " "}],
+                "confidence": 1,
+            },
             "unknown item field": {
-                "foods": [{"food": "egg", "quantity": 1, "measure": "large", "fdc_id": 1}]
+                "foods": [{"food": "egg", "quantity": 1, "measure": "large", "fdc_id": 1}],
+                "confidence": 1,
             },
         }
         for name, value in cases.items():

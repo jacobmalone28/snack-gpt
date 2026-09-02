@@ -188,7 +188,6 @@ def create_consumption_report_from_voice(
             timeout_seconds=processing_deadline - monotonic(),
             utterance_id=capture.utterance_id,
         )
-        _require_time_remaining(processing_deadline, monotonic)
         _log_stage(utterance_id, stage, stage_started, timer(), "success")
     except (VoiceProcessingTimeout, TimeoutError) as error:
         _log_stage(utterance_id, stage, stage_started, timer(), "failure", _failure_category(error))

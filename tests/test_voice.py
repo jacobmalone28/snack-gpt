@@ -528,6 +528,25 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(runtime.failure_reason, "Processing took too long.")
         self.assertEqual(runtime.calls, ["capture", "transcribe", "failure"])
 
+    def test_committed_report_is_acknowledged_when_storage_crosses_the_deadline(self) -> None:
+        runtime = ControlledVoiceRuntime()
+        times = iter((100.0, 100.0, 100.0, 100.0, 121.0))
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "events.sqlite3") as storage:
+                storage.initialize()
+
+                events = create_consumption_report_from_voice(
+                    storage,
+                    ControlledUsdaSearch([COMPLETE_RESULT]),
+                    runtime,
+                    monotonic=lambda: next(times),
+                )
+
+                self.assertEqual(events, storage.list_consumption_events())
+
+        self.assertIsNone(runtime.failure_reason)
+        self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "success"])
+
     def test_usda_timeout_creates_no_event_and_reports_before_final_deadline(self) -> None:
         runtime = ControlledVoiceRuntime()
         usda_search = TimingOutUsdaSearch([])
