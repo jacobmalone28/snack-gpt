@@ -1,11 +1,16 @@
 from collections.abc import Callable, Iterable
+from http.cookies import CookieError, SimpleCookie
 from datetime import date, timedelta
 from html import escape
 import json
+from math import ceil
+from threading import Lock
+import time
 from typing import BinaryIO, TypeAlias, cast
 from urllib.parse import parse_qs
 
-from snack_gpt.config import Settings
+from snack_gpt.auth import new_session_token, session_token_hash, verify_password
+from snack_gpt.config import ConfigurationError, Settings
 from snack_gpt.history_transfer import HistoryImportError, export_history, import_history
 from snack_gpt.ingestion import (
     ConsumptionEventConflict,
@@ -21,21 +26,118 @@ from snack_gpt.usda import FoodDataCentralSearch
 
 StartResponse: TypeAlias = Callable[[str, list[tuple[str, str]]], object]
 Application: TypeAlias = Callable[[dict[str, object], StartResponse], Iterable[bytes]]
+_SESSION_COOKIE = "snack_gpt_session"
+_SESSION_DURATION_SECONDS = 12 * 60 * 60
+_MAX_LOGIN_BACKOFF_SECONDS = 60
+_LOGIN_ATTEMPT_WINDOW_SECONDS = 5 * 60
+
+
+class _LoginThrottle:
+    def __init__(self) -> None:
+        self._failures: dict[str, tuple[int, float, float]] = {}
+        self._lock = Lock()
+
+    def retry_after(self, client: str, now: float) -> int:
+        with self._lock:
+            attempt = self._failures.get(client)
+            if attempt is None:
+                return 0
+            _, blocked_until, _ = attempt
+            return max(0, ceil(blocked_until - now))
+
+    def record_failure(self, client: str, now: float) -> None:
+        with self._lock:
+            failure_count, _, last_failure = self._failures.get(client, (0, 0, 0))
+            if now - last_failure > _LOGIN_ATTEMPT_WINDOW_SECONDS:
+                failure_count = 0
+            backoff = min(2**failure_count, _MAX_LOGIN_BACKOFF_SECONDS)
+            self._failures[client] = (failure_count + 1, now + backoff, now)
+
+    def record_success(self, client: str) -> None:
+        with self._lock:
+            self._failures.pop(client, None)
 
 
 def create_application(settings: Settings, usda_search: UsdaSearch | None = None) -> Application:
+    login_throttle = _LoginThrottle()
     configured_usda_search = usda_search
     if configured_usda_search is None and settings.usda_api_key:
         configured_usda_search = FoodDataCentralSearch(settings.usda_api_key)
 
     with Storage(settings.database_path) as storage:
         storage.initialize()
+        if settings.authentication_required and storage.owner_password_hash() is None:
+            raise ConfigurationError(
+                "LAN access requires an owner password; run snack-gpt set-password first"
+            )
 
     def application(
         environment: dict[str, object], start_response: StartResponse
     ) -> Iterable[bytes]:
         path = str(environment.get("PATH_INFO", "/"))
         method = str(environment.get("REQUEST_METHOD", "GET"))
+        if settings.authentication_required:
+            start_response = _no_store(start_response)
+            if path == "/login" and method == "GET":
+                return _login_response(start_response, "200 OK")
+            if path == "/login" and method == "POST":
+                client = str(environment.get("REMOTE_ADDR", "unknown"))
+                now = time.monotonic()
+                retry_after = login_throttle.retry_after(client, now)
+                if retry_after:
+                    return _login_response(
+                        start_response,
+                        "429 Too Many Requests",
+                        "Login temporarily unavailable.",
+                        retry_after,
+                    )
+                form = parse_qs(
+                    _request_body(environment).decode("utf-8"),
+                    keep_blank_values=True,
+                )
+                with Storage(settings.database_path) as storage:
+                    password_hash = storage.owner_password_hash()
+                    if password_hash is None or not verify_password(
+                        _form_value(form, "password"), password_hash
+                    ):
+                        login_throttle.record_failure(client, now)
+                        return _login_response(
+                            start_response, "401 Unauthorized", "Login failed."
+                        )
+                    token = new_session_token()
+                    session_created = storage.create_owner_session(
+                        session_token_hash(token),
+                        int(time.time()) + _SESSION_DURATION_SECONDS,
+                        password_hash,
+                    )
+                    if not session_created:
+                        return _login_response(
+                            start_response, "401 Unauthorized", "Login failed."
+                        )
+                login_throttle.record_success(client)
+                return _redirect_response(
+                    start_response,
+                    "/",
+                    _session_cookie(token, environment),
+                )
+
+            token = _session_token(environment)
+            with Storage(settings.database_path) as storage:
+                authenticated = token is not None and storage.owner_session_is_valid(
+                    session_token_hash(token), int(time.time())
+                )
+            if not authenticated:
+                return _login_response(start_response, "401 Unauthorized")
+            if path == "/logout" and method == "POST":
+                assert token is not None
+                with Storage(settings.database_path) as storage:
+                    storage.delete_owner_session(session_token_hash(token))
+                return _redirect_response(
+                    start_response,
+                    "/login",
+                    f"{_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+                )
+
         if path == "/consumption-events/export" and method == "GET":
             with Storage(settings.database_path) as storage:
                 document = export_history(storage)
@@ -81,6 +183,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                 _request_body(environment).decode("utf-8"), keep_blank_values=True
             )
             event_id = _form_value(form, "event_id")
+            corrected_description: str | None = None
             try:
                 expected_revision = _form_revision(form)
                 with Storage(settings.database_path) as storage:
@@ -95,6 +198,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                             measure=_form_value(form, "measure"),
                             day=_form_value(form, "day"),
                         )
+                        corrected_description = event.food_description
                     else:
                         if _form_value(form, "confirmed") != "yes":
                             raise IngestionError("Confirm deletion before removing the event.")
@@ -111,10 +215,11 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
                     start_response, "422 Unprocessable Entity", f"{error}\n"
                 )
             if path == "/consumption-events/correct":
+                assert corrected_description is not None
                 return _plain_response(
                     start_response,
                     "200 OK",
-                    f"Corrected Consumption Event for {event.food_description}.\n",
+                    f"Corrected Consumption Event for {corrected_description}.\n",
                 )
             return _plain_response(
                 start_response, "200 OK", "Removed Consumption Event.\n"
@@ -207,6 +312,11 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
             _render_day(selected_week + timedelta(days=offset), events)
             for offset in range(7)
         )
+        logout_form = (
+            '<form action="/logout" method="post"><button type="submit">Log out</button></form>'
+            if settings.authentication_required
+            else ""
+        )
         home_page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -246,6 +356,7 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
 <body>
   <main>
     <h1>Snack-GPT</h1>
+        {logout_form}
     <dl>
       <dt>Application</dt><dd class="ready">Application ready</dd>
       <dt>Storage</dt><dd>{escape(storage_status)}</dd>
@@ -343,6 +454,79 @@ def create_application(settings: Settings, usda_search: UsdaSearch | None = None
         return [home_page]
 
     return application
+
+
+def _login_response(
+    start_response: StartResponse,
+    status: str,
+    error: str = "",
+    retry_after: int | None = None,
+) -> Iterable[bytes]:
+    error_markup = f'<p role="alert">{escape(error)}</p>' if error else ""
+    body = f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Snack-GPT login</title></head>
+<body><main><h1>Snack-GPT</h1>{error_markup}<form action="/login" method="post"><label>Owner password <input name="password" type="password" required autocomplete="current-password"></label><button type="submit">Log in</button></form></main></body>
+</html>
+""".encode()
+    headers = [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-store"),
+    ]
+    if retry_after is not None:
+        headers.append(("Retry-After", str(retry_after)))
+    start_response(status, headers)
+    return [body]
+
+
+def _no_store(start_response: StartResponse) -> StartResponse:
+    def no_store_response(status: str, headers: list[tuple[str, str]]) -> object:
+        uncached_headers = [
+            header for header in headers if header[0].lower() != "cache-control"
+        ]
+        uncached_headers.append(("Cache-Control", "no-store"))
+        return start_response(status, uncached_headers)
+
+    return no_store_response
+
+
+def _redirect_response(
+    start_response: StartResponse, location: str, cookie: str
+) -> Iterable[bytes]:
+    start_response(
+        "303 See Other",
+        [
+            ("Location", location),
+            ("Set-Cookie", cookie),
+            ("Content-Length", "0"),
+            ("Cache-Control", "no-store"),
+        ],
+    )
+    return [b""]
+
+
+def _session_token(environment: dict[str, object]) -> str | None:
+    cookies = SimpleCookie()
+    try:
+        cookies.load(str(environment.get("HTTP_COOKIE", "")))
+    except CookieError:
+        return None
+    session = cookies.get(_SESSION_COOKIE)
+    return session.value if session is not None else None
+
+
+def _session_cookie(token: str, environment: dict[str, object]) -> str:
+    attributes = [
+        f"{_SESSION_COOKIE}={token}",
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Strict",
+        f"Max-Age={_SESSION_DURATION_SECONDS}",
+    ]
+    if environment.get("wsgi.url_scheme") == "https":
+        attributes.append("Secure")
+    return "; ".join(attributes)
 
 
 def _plain_response(

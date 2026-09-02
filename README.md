@@ -29,6 +29,22 @@ python3 -m snack_gpt serve
 
 Open <http://127.0.0.1:8000/> in a browser. Machine-readable health is available at <http://127.0.0.1:8000/health>.
 
+## Optional LAN access
+
+Snack-GPT listens only on `127.0.0.1` by default. To make it available on a
+trusted local network, first initialize the single owner password locally:
+
+```console
+python3 -m snack_gpt set-password
+```
+
+Then set `SNACK_GPT_HOST=0.0.0.0` (or a specific LAN address) and run the
+server. Every web route, including health and history export, requires login in
+LAN mode. Passwords are stored as scrypt hashes. Browser sessions use random,
+revocable `HttpOnly`, `SameSite=Strict` cookies; HTTPS requests also receive the
+`Secure` flag. Failed logins receive per-client progressive backoff. Running
+`set-password` again changes the password and signs out all existing sessions.
+
 ## Back up history
 
 The local web interface can download all Consumption Events as a versioned JSON
@@ -41,7 +57,7 @@ reports the conflict and preserves the local Consumption Event.
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `SNACK_GPT_DATABASE` | `snack-gpt.sqlite3` | SQLite database path |
-| `SNACK_GPT_HOST` | `127.0.0.1` | Web server bind address |
+| `SNACK_GPT_HOST` | `127.0.0.1` | Web server bind address; non-loopback values enable required authentication |
 | `SNACK_GPT_PORT` | `8000` | Web server port |
 | `USDA_FDC_API_KEY` | none | USDA FoodData Central API key required to create Consumption Events |
 

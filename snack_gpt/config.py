@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Mapping
 
@@ -13,6 +14,13 @@ class Settings:
     host: str
     port: int
     usda_api_key: str | None = None
+
+    @property
+    def authentication_required(self) -> bool:
+        try:
+            return not ip_address(self.host).is_loopback
+        except ValueError:
+            return True
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> "Settings":

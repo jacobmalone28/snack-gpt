@@ -4,10 +4,47 @@ import sqlite3
 import tempfile
 import unittest
 
+from snack_gpt.auth import hash_password, session_token_hash, verify_password
 from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
 
 
 class StorageTests(unittest.TestCase):
+    def test_password_reset_stores_only_a_hash_and_revokes_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "snack-gpt.sqlite3"
+            with Storage(database_path) as storage:
+                storage.initialize()
+                first_hash = hash_password("first password")
+                storage.set_owner_password_hash(first_hash)
+                token_hash = session_token_hash("session secret")
+                self.assertTrue(storage.create_owner_session(token_hash, 200, first_hash))
+
+                replacement_hash = hash_password("replacement password")
+                storage.set_owner_password_hash(replacement_hash)
+
+                self.assertEqual(storage.owner_password_hash(), replacement_hash)
+                self.assertTrue(verify_password("replacement password", replacement_hash))
+                self.assertFalse(storage.owner_session_is_valid(token_hash, 100))
+
+            database_contents = database_path.read_bytes()
+            self.assertNotIn(b"first password", database_contents)
+            self.assertNotIn(b"replacement password", database_contents)
+            self.assertNotIn(b"session secret", database_contents)
+
+    def test_session_creation_rejects_a_hash_invalidated_by_password_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Storage(Path(directory) / "snack-gpt.sqlite3") as storage:
+                storage.initialize()
+                verified_hash = hash_password("first password")
+                storage.set_owner_password_hash(verified_hash)
+
+                storage.set_owner_password_hash(hash_password("replacement password"))
+                token_hash = session_token_hash("stale login session")
+                created = storage.create_owner_session(token_hash, 200, verified_hash)
+
+                self.assertFalse(created)
+                self.assertFalse(storage.owner_session_is_valid(token_hash, 100))
+
     def test_stale_mutations_preserve_the_newer_consumption_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with Storage(Path(directory) / "snack-gpt.sqlite3") as storage:
@@ -82,7 +119,7 @@ class StorageTests(unittest.TestCase):
                 restarted_storage.initialize()
                 restarted_health = restarted_storage.health()
 
-            self.assertEqual(first_health.schema_version, 2)
+            self.assertEqual(first_health.schema_version, 3)
             self.assertTrue(first_health.writable)
             self.assertEqual(restarted_health, first_health)
 

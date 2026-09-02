@@ -5,13 +5,15 @@ import json
 import tempfile
 from threading import Thread
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 from wsgiref.simple_server import make_server
 
-from snack_gpt.config import Settings
+from snack_gpt.auth import hash_password
+from snack_gpt.config import ConfigurationError, Settings
 from snack_gpt.http import Application, create_application
 from snack_gpt.ingestion import FoodSearchResult
 from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage
@@ -64,7 +66,148 @@ def post_form(
     return statuses[0], response
 
 
+def request_application(
+    application: Application,
+    method: str,
+    path: str,
+    values: dict[str, str] | None = None,
+    cookie: str | None = None,
+    remote_address: str = "127.0.0.1",
+) -> tuple[str, list[tuple[str, str]], str]:
+    body = urlencode(values or {}).encode()
+    responses: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def start_response(status: str, headers: list[tuple[str, str]]) -> object:
+        responses.append((status, headers))
+        return None
+
+    environment: dict[str, object] = {
+        "PATH_INFO": path,
+        "REQUEST_METHOD": method,
+        "CONTENT_LENGTH": str(len(body)),
+        "CONTENT_TYPE": "application/x-www-form-urlencoded",
+        "REMOTE_ADDR": remote_address,
+        "wsgi.input": BytesIO(body),
+    }
+    if cookie is not None:
+        environment["HTTP_COOKIE"] = cookie
+    response_body = b"".join(application(environment, start_response)).decode()
+    status, headers = responses[0]
+    return status, headers, response_body
+
+
 class HttpTests(unittest.TestCase):
+    def test_lan_application_requires_configured_owner_password(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="0.0.0.0",
+                port=8000,
+            )
+
+            with self.assertRaisesRegex(
+                ConfigurationError, "run snack-gpt set-password first"
+            ):
+                create_application(settings)
+
+    def test_lan_login_protects_requests_and_logout_revokes_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="0.0.0.0",
+                port=8000,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.set_owner_password_hash(hash_password("owner password"))
+            application = create_application(settings)
+
+            denied_status, _, denied_body = request_application(
+                application, "GET", "/health"
+            )
+            malformed_cookie_status, _, _ = request_application(
+                application,
+                "GET",
+                "/health",
+                cookie='snack_gpt_session="unterminated',
+            )
+            failed_status, failed_headers, failed_body = request_application(
+                application,
+                "POST",
+                "/login",
+                {"password": "incorrect"},
+                remote_address="192.0.2.10",
+            )
+            login_status, login_headers, _ = request_application(
+                application, "POST", "/login", {"password": "owner password"}
+            )
+            set_cookie = dict(login_headers)["Set-Cookie"]
+            cookie = set_cookie.partition(";")[0]
+            health_status, health_headers, health_body = request_application(
+                application, "GET", "/health", cookie=cookie
+            )
+            home_status, home_headers, _ = request_application(
+                application, "GET", "/", cookie=cookie
+            )
+            export_status, export_headers, _ = request_application(
+                application, "GET", "/consumption-events/export", cookie=cookie
+            )
+            logout_status, logout_headers, _ = request_application(
+                application, "POST", "/logout", cookie=cookie
+            )
+            revoked_status, _, _ = request_application(
+                application, "GET", "/health", cookie=cookie
+            )
+
+        self.assertEqual(denied_status, "401 Unauthorized")
+        self.assertNotIn("schema_version", denied_body)
+        self.assertEqual(malformed_cookie_status, "401 Unauthorized")
+        self.assertEqual(failed_status, "401 Unauthorized")
+        self.assertEqual(dict(failed_headers)["Cache-Control"], "no-store")
+        self.assertIn("Login failed.", failed_body)
+        self.assertNotIn("owner password", failed_body)
+        self.assertEqual(login_status, "303 See Other")
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("SameSite=Strict", set_cookie)
+        self.assertEqual(health_status, "200 OK")
+        self.assertIn('"storage":"healthy"', health_body)
+        self.assertEqual(dict(health_headers)["Cache-Control"], "no-store")
+        self.assertEqual(home_status, "200 OK")
+        self.assertEqual(dict(home_headers)["Cache-Control"], "no-store")
+        self.assertEqual(export_status, "200 OK")
+        self.assertEqual(dict(export_headers)["Cache-Control"], "no-store")
+        self.assertEqual(logout_status, "303 See Other")
+        self.assertIn("Max-Age=0", dict(logout_headers)["Set-Cookie"])
+        self.assertEqual(revoked_status, "401 Unauthorized")
+
+    def test_lan_login_throttles_failures_before_repeating_scrypt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(
+                database_path=Path(directory) / "snack-gpt.sqlite3",
+                host="0.0.0.0",
+                port=8000,
+            )
+            with Storage(settings.database_path) as storage:
+                storage.initialize()
+                storage.set_owner_password_hash(hash_password("owner password"))
+            application = create_application(settings)
+
+            with patch("snack_gpt.http.time.monotonic", return_value=100), patch(
+                "snack_gpt.http.verify_password", return_value=False
+            ) as verify:
+                first_status, _, _ = request_application(
+                    application, "POST", "/login", {"password": "incorrect"}
+                )
+                blocked_status, blocked_headers, blocked_body = request_application(
+                    application, "POST", "/login", {"password": "incorrect"}
+                )
+
+        self.assertEqual(first_status, "401 Unauthorized")
+        self.assertEqual(blocked_status, "429 Too Many Requests")
+        self.assertEqual(dict(blocked_headers)["Retry-After"], "1")
+        self.assertIn("temporarily unavailable", blocked_body)
+        verify.assert_called_once()
+
     def test_owner_can_correct_a_consumption_event(self) -> None:
         original = ConsumptionEvent(
             event_id="event-id",
@@ -542,7 +685,7 @@ class HttpTests(unittest.TestCase):
             self.assertIn("<h1>Snack-GPT</h1>", body)
             self.assertIn("Application ready", body)
             self.assertIn("Storage healthy", body)
-            self.assertIn("Schema 2", body)
+            self.assertIn("Schema 3", body)
             self.assertIn('action="/consumption-events"', body)
             self.assertIn('name="food"', body)
             self.assertIn('name="quantity"', body)
@@ -583,7 +726,7 @@ class HttpTests(unittest.TestCase):
                 {
                     "application": "ready",
                     "storage": "healthy",
-                    "schema_version": 2,
+                    "schema_version": 3,
                 },
             )
 
