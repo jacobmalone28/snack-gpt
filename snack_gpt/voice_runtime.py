@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 import json
+import logging
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,6 +25,7 @@ CAPTURE_TIMEOUT_SECONDS = 15.0
 CAPTURE_SILENCE_SECONDS = 1.0
 FEEDBACK_TIMEOUT_SECONDS = 10.0
 WAKE_OVERLAP_SECONDS = 0.75
+LOGGER = logging.getLogger(__name__)
 REQUIRED_COMMANDS = {
     "wake_capture",
     "wake_detection",
@@ -130,9 +132,20 @@ class CommandVoiceRuntime:
                     result: object = json.loads(wake_result.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError) as error:
                     raise VoiceRuntimeError("Wake detection produced invalid output.") from error
-                if not isinstance(result, dict) or cast(dict[object, object], result).get("detected") is not True:
+                if not isinstance(result, dict):
+                    raise VoiceRuntimeError("Wake detection produced invalid output.")
+                wake_result = cast(dict[object, object], result)
+                detected = wake_result.get("detected") is True
+                peak_score = wake_result.get("peak_score")
+                LOGGER.info(
+                    "wake_detection detected=%s peak_score=%s",
+                    str(detected).lower(),
+                    peak_score if isinstance(peak_score, (int, float)) else "unknown",
+                )
+                if not detected:
                     continue
                 self._run("wake_sound" if "wake_sound" in self._commands else "success_sound", {})
+                LOGGER.info("wake_acknowledgement completed=true")
                 break
 
         self._artifacts = tempfile.TemporaryDirectory(

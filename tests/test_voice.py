@@ -180,7 +180,15 @@ class ControlledCommands:
             path = Path(command[2])
             self.paths.append(path)
             self.wake_attempts += 1
-            path.write_text(json.dumps({"detected": self.wake_attempts == 2}), encoding="utf-8")
+            path.write_text(
+                json.dumps(
+                    {
+                        "detected": self.wake_attempts == 2,
+                        "peak_score": 0.9 if self.wake_attempts == 2 else 0.1,
+                    }
+                ),
+                encoding="utf-8",
+            )
         elif name == "speech-capture":
             assert path is not None
             self.assert_timeout(timeout, 15.0)
@@ -228,6 +236,27 @@ COMMANDS = {
 
 
 class VoiceTests(unittest.TestCase):
+    def test_command_runtime_logs_wake_scores_and_acknowledgement(self) -> None:
+        with tempfile.TemporaryDirectory() as memory_directory:
+            runtime = CommandVoiceRuntime(
+                COMMANDS,
+                Path(memory_directory),
+                run_command=ControlledCommands().run,
+            )
+
+            with self.assertLogs("snack_gpt.voice_runtime", level="INFO") as logs:
+                runtime.wait_for_wake_and_capture()
+            runtime.report_failure("test complete", float("inf"))
+
+        self.assertEqual(
+            logs.output,
+            [
+                "INFO:snack_gpt.voice_runtime:wake_detection detected=false peak_score=0.1",
+                "INFO:snack_gpt.voice_runtime:wake_detection detected=true peak_score=0.9",
+                "INFO:snack_gpt.voice_runtime:wake_acknowledgement completed=true",
+            ],
+        )
+
     def test_command_runtime_uses_success_sound_when_wake_sound_is_not_configured(self) -> None:
         controlled_commands = ControlledCommands()
         commands = {name: command for name, command in COMMANDS.items() if name != "wake_sound"}
