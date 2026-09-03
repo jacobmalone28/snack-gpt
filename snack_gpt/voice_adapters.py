@@ -181,7 +181,7 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
                 },
                 "unit": {
                     "type": "string",
-                    "description": "the unit the quantity is in",
+                    "description": "the unit the quantity is in. This could be the food itself",
                 },
             },
             "required": ["food_name", "quantity", "unit"],
