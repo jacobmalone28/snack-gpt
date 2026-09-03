@@ -79,7 +79,9 @@ class ApplianceTests(unittest.TestCase):
             audio_command = root / "voice-audio"
             audio_command.touch()
 
-            with patch("snack_gpt.appliance.subprocess.run") as run_command:
+            with patch.dict(
+                os.environ, {"USDA_FDC_API_KEY": "shell-only-key"}
+            ), patch("snack_gpt.appliance.subprocess.run") as run_command:
                 result = start(
                     paths=AppliancePaths(environment_path, audio_command),
                     elevated_command=("sudo",),

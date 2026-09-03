@@ -30,9 +30,7 @@ def _load_environment(path: Path) -> dict[str, str]:
         values: Mapping[str, str | None] = dotenv_values(path)
     except OSError as error:
         raise ValueError(f"cannot read {path}") from error
-    environment = os.environ.copy()
-    environment.update({key: value for key, value in values.items() if value is not None})
-    return environment
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def _audio_environment(environment: Mapping[str, str]) -> dict[str, str]:
