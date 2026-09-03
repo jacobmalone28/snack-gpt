@@ -9,6 +9,18 @@ from snack_gpt import voice_audio
 
 
 class VoiceAudioTests(unittest.TestCase):
+    def test_wake_and_fallback_tones_are_long_enough_to_hear(self) -> None:
+        with patch("snack_gpt.voice_audio.subprocess.run") as run_command:
+            wake_result = voice_audio.main(["tone", "wake"])
+            wake_command = run_command.call_args.args[0]
+            success_result = voice_audio.main(["tone", "success"])
+            success_command = run_command.call_args.args[0]
+
+        self.assertEqual(wake_result, 0)
+        self.assertEqual(success_result, 0)
+        self.assertIn("0.35", wake_command)
+        self.assertIn("0.25", success_command)
+
     def test_capture_uses_system_default_microphone(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch(
             "snack_gpt.voice_audio.subprocess.run"

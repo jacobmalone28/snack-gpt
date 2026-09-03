@@ -80,13 +80,14 @@ def _play(audio: Path) -> int:
 
 def _tone(kind: str) -> int:
     frequencies = {"wake": "660", "success": "880", "error": "220"}
+    durations = {"wake": "0.35", "success": "0.25", "error": "0.25"}
     return _run(
         [
             "play",
             "--no-show-progress",
             "--null",
             "synth",
-            "0.08",
+            durations[kind],
             "sine",
             frequencies[kind],
         ],
