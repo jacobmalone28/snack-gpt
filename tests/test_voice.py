@@ -216,6 +216,7 @@ class TranscriptionTimingOutCommands(ControlledCommands):
 COMMANDS = {
     "wake_capture": ["wake-capture", "{audio}"],
     "wake_detection": ["wake-detection", "{audio}", "{output}"],
+    "wake_sound": ["wake-sound"],
     "speech_capture": ["speech-capture", "{audio}", "{silence_seconds}"],
     "transcription": ["transcription", "{output}"],
     "extraction": ["extraction", "{output}"],
@@ -227,6 +228,31 @@ COMMANDS = {
 
 
 class VoiceTests(unittest.TestCase):
+    def test_command_runtime_uses_success_sound_when_wake_sound_is_not_configured(self) -> None:
+        controlled_commands = ControlledCommands()
+        commands = {name: command for name, command in COMMANDS.items() if name != "wake_sound"}
+        with tempfile.TemporaryDirectory() as memory_directory:
+            runtime = CommandVoiceRuntime(
+                commands,
+                Path(memory_directory),
+                run_command=controlled_commands.run,
+            )
+
+            runtime.wait_for_wake_and_capture()
+            runtime.report_failure("test complete", float("inf"))
+
+        self.assertEqual(
+            controlled_commands.names[:6],
+            [
+                "wake-capture",
+                "wake-detection",
+                "wake-capture",
+                "wake-detection",
+                "success-sound",
+                "speech-capture",
+            ],
+        )
+
     def test_command_runtime_overlaps_consecutive_wake_chunks(self) -> None:
         controlled_commands = ControlledCommands()
         detected_frame_counts: list[int] = []
@@ -490,6 +516,7 @@ class VoiceTests(unittest.TestCase):
                 "wake-detection",
                 "wake-capture",
                 "wake-detection",
+                "wake-sound",
                 "speech-capture",
                 "transcription",
                 "extraction",

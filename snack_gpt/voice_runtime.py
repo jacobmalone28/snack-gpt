@@ -132,6 +132,7 @@ class CommandVoiceRuntime:
                     raise VoiceRuntimeError("Wake detection produced invalid output.") from error
                 if not isinstance(result, dict) or cast(dict[object, object], result).get("detected") is not True:
                     continue
+                self._run("wake_sound" if "wake_sound" in self._commands else "success_sound", {})
                 break
 
         self._artifacts = tempfile.TemporaryDirectory(

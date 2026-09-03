@@ -251,6 +251,7 @@ cat >"$CONFIG_DIRECTORY/voice.json" <<EOF
     "commands": {
         "wake_capture": ["$BIN/voice-audio", "capture", "--mode", "wake", "--output", "{audio}"],
         "wake_detection": ["$BIN/openwakeword-probe", "--model", "$MODELS/hey_jarvis_v0.1.onnx", "--audio", "{audio}", "--output", "{output}"],
+        "wake_sound": ["$BIN/voice-audio", "tone", "wake"],
         "speech_capture": ["$BIN/voice-audio", "capture", "--mode", "speech", "--silence-seconds", "{silence_seconds}", "--output", "{audio}"],
         "transcription": ["$BIN/whisper-probe", "--binary", "$BIN/whisper-cli", "--binary-argument=-ac", "--binary-argument=512", "--model", "$MODELS/ggml-tiny.en.bin", "--audio", "{audio}", "--output", "{output}"],
         "extraction": ["$BIN/needle-probe", "--library", "$LIB/libneedle.so", "--transcript", "{transcript}", "--output", "{output}"],

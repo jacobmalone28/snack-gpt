@@ -78,7 +78,7 @@ def _play(audio: Path) -> int:
 
 
 def _tone(kind: str) -> int:
-    frequency = "880" if kind == "success" else "220"
+    frequencies = {"wake": "660", "success": "880", "error": "220"}
     return _run(
         [
             "play",
@@ -87,7 +87,7 @@ def _tone(kind: str) -> int:
             "synth",
             "0.08",
             "sine",
-            frequency,
+            frequencies[kind],
         ],
         device_variable="SNACK_GPT_SPEAKER",
     )
@@ -116,7 +116,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     play.add_argument("audio", type=Path)
 
     tone = subparsers.add_parser("tone")
-    tone.add_argument("kind", choices=("success", "error"))
+    tone.add_argument("kind", choices=("wake", "success", "error"))
 
     subparsers.add_parser("check")
     parsed = parser.parse_args(arguments)
