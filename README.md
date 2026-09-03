@@ -44,6 +44,7 @@ Commands are executed directly without a shell and must obey these contracts:
 | --- | --- |
 | `wake_capture` | Write a non-empty audio clip to `{audio}`. |
 | `wake_detection` | Read `{audio}` and write JSON containing `{"detected": true/false}` to `{output}`. |
+| `wake_sound` (optional) | Play the wake acknowledgement and exit when playback finishes. Falls back to `success_sound` when omitted. |
 | `speech_capture` | Write non-empty report audio to `{audio}`, ending after approximately `{silence_seconds}` of silence; Snack-GPT terminates it after 15 seconds. |
 | `transcription` | Read `{audio}` and write a non-blank UTF-8 transcript to `{output}`. |
 | `extraction` | Read `{transcript}` and write `{"foods":[{"food":"egg","quantity":1,"measure":"large"}],"confidence":0.95}` to `{output}`. Preserve repeated foods and include confidence from zero to one. |
@@ -59,6 +60,7 @@ For example:
 	"commands": {
 		"wake_capture": ["voice-capture", "--wake", "--output", "{audio}"],
 		"wake_detection": ["openwakeword-probe", "--model", "/opt/snack-gpt/models/hey_jarvis_v0.1.onnx", "--audio", "{audio}", "--output", "{output}"],
+		"wake_sound": ["voice-play", "wake.wav"],
 		"speech_capture": ["voice-capture", "--until-silence", "{silence_seconds}", "--output", "{audio}"],
 		"transcription": ["whisper-probe", "--binary", "/opt/snack-gpt/bin/whisper-cli", "--model", "/opt/snack-gpt/models/ggml-tiny.en.bin", "--audio", "{audio}", "--output", "{output}"],
 		"extraction": ["needle-probe", "--library", "/opt/snack-gpt/lib/libneedle.so", "--transcript", "{transcript}", "--output", "{output}"],
@@ -130,6 +132,13 @@ Values exported in the shell take precedence over values in `.env`. The `.env` f
 
 ## Raspberry Pi voice acceptance
 
-The reproducible on-device procedure and manifest are in
-[`docs/voice-probe.md`](docs/voice-probe.md). The probe runs all local inference
-stages without network access and records their timings and peak memory.
+Cross-platform launch and model paths are documented in
+[`docs/installation.md`](docs/installation.md). The reproducible Pi inference
+probe and complete appliance acceptance procedure are in
+[`docs/voice-probe.md`](docs/voice-probe.md) and
+[`docs/raspberry-pi-acceptance.md`](docs/raspberry-pi-acceptance.md). The probe
+runs all local inference stages without network access and records their timings
+and peak memory; physical appliance acceptance additionally verifies audio,
+wake reliability, web workflows, degraded states, and restart persistence.
+After Pi provisioning and USDA configuration, `snackgpt start` checks the
+configured microphone and speaker before enabling and starting the appliance.

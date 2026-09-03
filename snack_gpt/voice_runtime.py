@@ -4,11 +4,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 import json
+import logging
 from pathlib import Path
 import subprocess
 import tempfile
 import time
 from typing import cast
+import wave
 
 from snack_gpt.storage import ConsumptionEvent
 from snack_gpt.voice import (
@@ -22,6 +24,8 @@ from snack_gpt.voice import (
 CAPTURE_TIMEOUT_SECONDS = 15.0
 CAPTURE_SILENCE_SECONDS = 1.0
 FEEDBACK_TIMEOUT_SECONDS = 10.0
+WAKE_OVERLAP_SECONDS = 0.75
+LOGGER = logging.getLogger(__name__)
 REQUIRED_COMMANDS = {
     "wake_capture",
     "wake_detection",
@@ -100,6 +104,7 @@ class CommandVoiceRuntime:
 
     def wait_for_wake_and_capture(self) -> CapturedSpeech:
         self._cleanup()
+        previous_wake_tail = b""
         while True:
             if not self._listening_allowed():
                 raise VoiceListeningPaused
@@ -109,20 +114,38 @@ class CommandVoiceRuntime:
             ) as directory:
                 root = Path(directory)
                 wake_audio = root / "wake.wav"
+                detection_audio = root / "wake-detection.wav"
                 wake_result = root / "wake.json"
                 self._run("wake_capture", {"audio": str(wake_audio)})
                 if not self._listening_allowed():
                     raise VoiceListeningPaused
+                previous_wake_tail = _write_overlapping_wake_audio(
+                    wake_audio,
+                    detection_audio,
+                    previous_wake_tail,
+                )
                 self._run(
                     "wake_detection",
-                    {"audio": str(wake_audio), "output": str(wake_result)},
+                    {"audio": str(detection_audio), "output": str(wake_result)},
                 )
                 try:
                     result: object = json.loads(wake_result.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError) as error:
                     raise VoiceRuntimeError("Wake detection produced invalid output.") from error
-                if not isinstance(result, dict) or cast(dict[object, object], result).get("detected") is not True:
+                if not isinstance(result, dict):
+                    raise VoiceRuntimeError("Wake detection produced invalid output.")
+                wake_result = cast(dict[object, object], result)
+                detected = wake_result.get("detected") is True
+                peak_score = wake_result.get("peak_score")
+                LOGGER.info(
+                    "wake_detection detected=%s peak_score=%s",
+                    str(detected).lower(),
+                    peak_score if isinstance(peak_score, (int, float)) else "unknown",
+                )
+                if not detected:
                     continue
+                self._run("wake_sound" if "wake_sound" in self._commands else "success_sound", {})
+                LOGGER.info("wake_acknowledgement completed=true")
                 break
 
         self._artifacts = tempfile.TemporaryDirectory(
@@ -254,6 +277,31 @@ class CommandVoiceRuntime:
         if self._artifacts is not None:
             self._artifacts.cleanup()
             self._artifacts = None
+
+
+def _write_overlapping_wake_audio(
+    source: Path,
+    destination: Path,
+    previous_tail: bytes,
+) -> bytes:
+    try:
+        with wave.open(str(source), "rb") as audio:
+            channels = audio.getnchannels()
+            sample_width = audio.getsampwidth()
+            frame_rate = audio.getframerate()
+            compression = audio.getcomptype()
+            frames = audio.readframes(audio.getnframes())
+        if (channels, sample_width, frame_rate, compression) != (1, 2, 16000, "NONE"):
+            raise VoiceRuntimeError("Wake capture produced an unsupported audio format.")
+        with wave.open(str(destination), "wb") as output:
+            output.setnchannels(channels)
+            output.setsampwidth(sample_width)
+            output.setframerate(frame_rate)
+            output.writeframes(previous_tail + frames)
+    except (OSError, EOFError, wave.Error) as error:
+        raise VoiceRuntimeError("Wake capture produced invalid audio.") from error
+    overlap_bytes = int(frame_rate * WAKE_OVERLAP_SECONDS) * channels * sample_width
+    return frames[-overlap_bytes:]
 
 
 def _run_command(command: Sequence[str], timeout: float | None) -> None:

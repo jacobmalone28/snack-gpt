@@ -13,6 +13,75 @@ from snack_gpt.voice import ExtractionError, parse_consumption_report
 
 
 class VoiceAdapterTests(unittest.TestCase):
+    def test_wake_worker_reuses_loaded_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            modules = root / "modules" / "openwakeword"
+            modules.mkdir(parents=True)
+            (modules / "__init__.py").write_text("", encoding="utf-8")
+            loads = root / "loads.txt"
+            (modules / "model.py").write_text(
+                textwrap.dedent(
+                    f"""
+                    from pathlib import Path
+
+                    class Model:
+                        def __init__(self, **kwargs):
+                            with Path({str(loads)!r}).open("a") as output:
+                                output.write("loaded\\n")
+
+                        def predict_clip(self, path):
+                            return [{{"hey_jarvis": 0.9}}]
+                    """
+                ),
+                encoding="utf-8",
+            )
+            environment = os.environ | {
+                "PYTHONPATH": f"{root / 'modules'}{os.pathsep}{os.getcwd()}"
+            }
+            socket_path = root / "wake.sock"
+            model = root / "hey_jarvis.onnx"
+            model.write_bytes(b"model")
+            worker = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "snack_gpt.voice_adapters",
+                    "wake-worker",
+                    "--model",
+                    str(model),
+                    "--socket",
+                    str(socket_path),
+                ],
+                env=environment,
+            )
+            try:
+                for _ in range(100):
+                    if socket_path.exists():
+                        break
+                    time.sleep(0.01)
+                self.assertTrue(socket_path.exists())
+                audio = root / "wake.wav"
+                audio.write_bytes(b"audio")
+                for attempt in range(2):
+                    output = root / f"wake-{attempt}.json"
+                    self._run_adapter(
+                        environment,
+                        "wake",
+                        "--socket",
+                        socket_path,
+                        "--audio",
+                        audio,
+                        "--output",
+                        output,
+                    )
+                    self.assertTrue(json.loads(output.read_text())["detected"])
+
+                self.assertEqual(loads.read_text().splitlines(), ["loaded"])
+            finally:
+                worker.terminate()
+                worker.wait(timeout=5)
+
     def test_needle_output_is_parsed_into_a_typed_consumption_report(self) -> None:
         report = parse_consumption_report(
             {
@@ -88,8 +157,11 @@ class VoiceAdapterTests(unittest.TestCase):
             modules = root / "modules"
             modules.mkdir()
             (modules / "needle.py").write_text(
-                "def extract(text, schema, weights=None):\n"
-                "    return {'foods': [{'food': 'egg', 'quantity': 1}], 'confidence': 1}\n",
+                "class Needle:\n"
+                "    def __init__(self, tools, weights=None): pass\n"
+                "    def complete(self, text):\n"
+                "        return {'confidence': 1, 'function_calls': "
+                "[{'arguments': {'food_name': 'egg', 'quantity': 1}}]}\n",
                 encoding="utf-8",
             )
             transcript = root / "transcript.txt"
@@ -115,7 +187,7 @@ class VoiceAdapterTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 1)
-            self.assertIn("food, quantity, and measure", result.stderr)
+            self.assertIn("extracted measure must be non-blank text", result.stderr)
             self.assertFalse(extraction.exists())
 
     def test_adapters_normalize_runtime_outputs(self) -> None:
@@ -140,13 +212,18 @@ class VoiceAdapterTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (modules / "needle.py").write_text(
-                "def extract(text, schema, weights=None):\n"
-                "    assert schema['name'] == 'log_food_intake'\n"
-                "    item = schema['parameters']['properties']['foods']['items']\n"
-                "    assert item['required'] == ['food', 'quantity', 'measure']\n"
-                "    assert item['properties']['quantity']['exclusiveMinimum'] == 0\n"
-                "    assert schema['parameters']['required'] == ['foods', 'confidence']\n"
-                "    return {'foods': [{'food': 'white rice cooked', 'quantity': 0.75, 'measure': 'cup'}], 'confidence': 0.9}\n",
+                "class Needle:\n"
+                "    def __init__(self, tools, weights=None):\n"
+                "        schema = tools[0]\n"
+                "        assert schema['name'] == 'log_food_intake'\n"
+                "        parameters = schema['parameters']\n"
+                "        assert parameters['required'] == ['food_name', 'quantity', 'unit']\n"
+                "        assert parameters['properties']['quantity']['exclusiveMinimum'] == 0\n"
+                "        assert 'confidence' not in schema['parameters']['properties']\n"
+                "    def complete(self, text):\n"
+                "        return {'confidence': 0.0, 'function_calls': "
+                "[{'arguments': {'food_name': 'white rice cooked', "
+                "'quantity': 0.75, 'unit': 'cup'}}]}\n",
                 encoding="utf-8",
             )
             fake_binary = root / "fake_binary.py"

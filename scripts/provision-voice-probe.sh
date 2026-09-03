@@ -2,6 +2,8 @@
 set -euo pipefail
 
 PREFIX=/opt/snack-gpt
+CONFIG_DIRECTORY=/etc/snack-gpt
+STATE_DIRECTORY=/var/lib/snack-gpt
 OPENWAKEWORD_VERSION=0.6.0
 NEEDLE_VERSION=2.0.10
 PIPER_VERSION=1.7.0
@@ -10,11 +12,12 @@ WHISPER_COMMIT=41fc9dea6a4fe056424be86f61164413903fcff4
 WHISPER_MODEL_SHA1=c78c86eb1a8faa21b369bcd33207cc90d64ae9df
 FIXTURE_SOURCE=
 CAPTURE_DEVICE=
+PLAYBACK_DEVICE=
 ACCEPT_LICENSES=false
 
 usage() {
     cat <<'EOF'
-Usage: sudo scripts/provision-voice-probe.sh --accept-model-licenses [--fixture FILE] [--capture-device DEVICE]
+Usage: sudo scripts/provision-voice-probe.sh --accept-model-licenses [--fixture FILE] [--capture-device DEVICE] [--playback-device DEVICE]
 
 Installs the local voice acceptance stack under /opt/snack-gpt. Without
 --fixture, the script records a seven-second 16 kHz mono WAV from the default
@@ -22,6 +25,7 @@ ALSA capture device. When exactly one hardware capture device exists, the
 script selects it automatically.
 
 --capture-device uses an explicit ALSA device such as plughw:1,0.
+--playback-device uses an explicit ALSA device such as plughw:0,0.
 
 --accept-model-licenses acknowledges OpenWakeWord's CC BY-NC-SA 4.0 model
 license and the Piper voice MODEL_CARD fetched during provisioning.
@@ -42,6 +46,11 @@ while (($#)); do
         --capture-device)
             [[ $# -ge 2 ]] || { echo "--capture-device requires a device" >&2; exit 2; }
             CAPTURE_DEVICE=$2
+            shift 2
+            ;;
+        --playback-device)
+            [[ $# -ge 2 ]] || { echo "--playback-device requires a device" >&2; exit 2; }
+            PLAYBACK_DEVICE=$2
             shift 2
             ;;
         -h|--help)
@@ -80,8 +89,8 @@ echo "Installing system packages..."
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     alsa-utils bubblewrap build-essential ca-certificates cmake curl git \
-    libopenblas-dev python3 python3-pip python3-venv
-if [[ -z $FIXTURE_SOURCE && -z $CAPTURE_DEVICE ]]; then
+    libopenblas-dev python3 python3-pip python3-venv sox libsox-fmt-alsa
+if [[ -z $CAPTURE_DEVICE ]]; then
     mapfile -t CAPTURE_DEVICES < <(
         LC_ALL=C arecord --list-devices 2>/dev/null |
             sed -nE 's/^card ([0-9]+):.*device ([0-9]+):.*/plughw:\1,\2/p'
@@ -92,6 +101,20 @@ if [[ -z $FIXTURE_SOURCE && -z $CAPTURE_DEVICE ]]; then
         echo "Expected one ALSA hardware capture device; found ${#CAPTURE_DEVICES[@]}." >&2
         arecord --list-devices >&2 || true
         echo "Rerun with --capture-device DEVICE (for example, plughw:1,0)." >&2
+        exit 1
+    fi
+fi
+if [[ -z $PLAYBACK_DEVICE ]]; then
+    mapfile -t PLAYBACK_DEVICES < <(
+        LC_ALL=C aplay --list-devices 2>/dev/null |
+            sed -nE 's/^card ([0-9]+):.*device ([0-9]+):.*/plughw:\1,\2/p'
+    )
+    if (( ${#PLAYBACK_DEVICES[@]} == 1 )); then
+        PLAYBACK_DEVICE=${PLAYBACK_DEVICES[0]}
+    else
+        echo "Expected one ALSA hardware playback device; found ${#PLAYBACK_DEVICES[@]}." >&2
+        aplay --list-devices >&2 || true
+        echo "Rerun with --playback-device DEVICE (for example, plughw:0,0)." >&2
         exit 1
     fi
 fi
@@ -124,7 +147,8 @@ echo "Installing pinned Python runtimes..."
 "${PIP[@]}" install --no-deps \
     "openwakeword==$OPENWAKEWORD_VERSION" \
     "cactus-needle==$NEEDLE_VERSION"
-"${PIP[@]}" install --no-deps "$REPOSITORY_ROOT"
+"${PIP[@]}" install "$REPOSITORY_ROOT"
+"$PYTHON" -c "from snack_gpt.__main__ import main"
 
 echo "Downloading OpenWakeWord models..."
 "$PYTHON" - "$MODELS" <<'PY'
@@ -194,10 +218,16 @@ EOF
 }
 
 write_adapter "$BIN/openwakeword-probe" wake
+write_adapter "$BIN/openwakeword-worker" wake-worker
 write_adapter "$BIN/whisper-probe" transcribe
 write_adapter "$BIN/needle-probe" extract
 write_adapter "$BIN/piper-probe" synthesize
 write_adapter "$BIN/piper-worker" piper-worker
+cat >"$BIN/voice-audio" <<EOF
+#!/bin/sh
+exec "$PYTHON" -m snack_gpt.voice_audio "\$@"
+EOF
+chmod 0755 "$BIN/voice-audio"
 cat >"$BIN/piper" <<EOF
 #!/bin/sh
 exec "$PYTHON" -m piper "\$@"
@@ -233,7 +263,122 @@ if details != (1, 2, 16000):
 PY
 
 chmod -R a+rX "$PREFIX"
+
+echo "Installing Snack-GPT application configuration..."
+install -d -m 0755 "$CONFIG_DIRECTORY"
+install -d -m 0700 "$STATE_DIRECTORY"
+cat >"$CONFIG_DIRECTORY/voice.json" <<EOF
+{
+    "memory_directory": "/dev/shm",
+    "commands": {
+        "wake_capture": ["$BIN/voice-audio", "capture", "--mode", "wake", "--output", "{audio}"],
+        "wake_detection": ["$BIN/openwakeword-probe", "--socket", "/run/snack-gpt-wake/wake.sock", "--audio", "{audio}", "--output", "{output}"],
+        "wake_sound": ["$BIN/voice-audio", "tone", "wake"],
+        "speech_capture": ["$BIN/voice-audio", "capture", "--mode", "speech", "--silence-seconds", "{silence_seconds}", "--output", "{audio}"],
+        "transcription": ["$BIN/whisper-probe", "--binary", "$BIN/whisper-cli", "--binary-argument=-ac", "--binary-argument=512", "--model", "$MODELS/ggml-tiny.en.bin", "--audio", "{audio}", "--output", "{output}"],
+        "extraction": ["$BIN/needle-probe", "--library", "$LIB/libneedle.so", "--transcript", "{transcript}", "--output", "{output}"],
+        "success_sound": ["$BIN/voice-audio", "tone", "success"],
+        "error_sound": ["$BIN/voice-audio", "tone", "error"],
+        "speech_synthesis": ["$BIN/piper-probe", "--socket", "/run/snack-gpt/piper.sock", "--text", "{text}", "--output", "{output}"],
+        "play_speech": ["$BIN/voice-audio", "play", "{audio}"]
+    }
+}
+EOF
+cat >"$CONFIG_DIRECTORY/environment" <<EOF
+SNACK_GPT_DATABASE=$STATE_DIRECTORY/snack-gpt.sqlite3
+SNACK_GPT_HOST=127.0.0.1
+SNACK_GPT_PORT=8000
+SNACK_GPT_VOICE_MANIFEST=$CONFIG_DIRECTORY/voice.json
+# USDA_FDC_API_KEY=
+SNACK_GPT_MICROPHONE=$CAPTURE_DEVICE
+SNACK_GPT_SPEAKER=$PLAYBACK_DEVICE
+EOF
+SERVICE_USER=${SUDO_USER:-}
+[[ -n $SERVICE_USER && $SERVICE_USER != root ]] || {
+        echo "Run with sudo from the unprivileged account that will operate Snack-GPT." >&2
+        exit 1
+}
+id "$SERVICE_USER" >/dev/null 2>&1 || {
+    echo "Service user does not exist: $SERVICE_USER" >&2
+    exit 1
+}
+chown root:"$SERVICE_USER" "$CONFIG_DIRECTORY/environment"
+chmod 0640 "$CONFIG_DIRECTORY/environment"
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$STATE_DIRECTORY"
+
+cat >/etc/systemd/system/snack-gpt-web.service <<EOF
+[Unit]
+Description=Snack-GPT web application
+After=network.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+EnvironmentFile=$CONFIG_DIRECTORY/environment
+ExecStart=$PYTHON -m snack_gpt serve
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/systemd/system/snack-gpt-piper.service <<EOF
+[Unit]
+Description=Snack-GPT speech synthesis worker
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+RuntimeDirectory=snack-gpt
+ExecStart=$BIN/piper-worker --model $MODELS/en_US-lessac-low.onnx --socket /run/snack-gpt/piper.sock
+ExecStartPost=/bin/sh -c 'attempt=0; while [ ! -S /run/snack-gpt/piper.sock ] && [ "\$attempt" -lt 300 ]; do attempt=\$((attempt + 1)); sleep 0.1; done; [ -S /run/snack-gpt/piper.sock ]'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/systemd/system/snack-gpt-wake.service <<EOF
+[Unit]
+Description=Snack-GPT wake-word worker
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+RuntimeDirectory=snack-gpt-wake
+ExecStart=$BIN/openwakeword-worker --model $MODELS/hey_jarvis_v0.1.onnx --socket /run/snack-gpt-wake/wake.sock
+ExecStartPost=/bin/sh -c 'attempt=0; while [ ! -S /run/snack-gpt-wake/wake.sock ] && [ "\$attempt" -lt 300 ]; do attempt=\$((attempt + 1)); sleep 0.1; done; [ -S /run/snack-gpt-wake/wake.sock ]'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/systemd/system/snack-gpt-listener.service <<EOF
+[Unit]
+Description=Snack-GPT voice listener
+After=network.target snack-gpt-wake.service snack-gpt-piper.service
+Requires=snack-gpt-wake.service snack-gpt-piper.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+EnvironmentFile=$CONFIG_DIRECTORY/environment
+ExecStart=$PYTHON -m snack_gpt listen
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl disable snack-gpt-web.service snack-gpt-wake.service snack-gpt-piper.service snack-gpt-listener.service
 echo
-echo "Provisioning complete. Run the acceptance probe as an unprivileged user:"
+echo "Provisioning complete. Services are installed disabled."
+echo "Set USDA_FDC_API_KEY in $CONFIG_DIRECTORY/environment, then start as $SERVICE_USER:"
+echo "  $VENV/bin/snackgpt start"
+echo "Then run the acceptance probe:"
 echo "  cd $REPOSITORY_ROOT"
 echo "  $PYTHON -m snack_gpt.voice_probe docs/voice-probe.pi.json --output voice-probe-results.json"
