@@ -9,6 +9,8 @@ import sys
 
 from dotenv import dotenv_values
 
+from snack_gpt.config import ConfigurationError, Settings
+
 
 SERVICES = (
     "snack-gpt-web.service",
@@ -35,10 +37,23 @@ def _load_environment(path: Path) -> dict[str, str]:
 
 def _audio_environment(environment: Mapping[str, str]) -> dict[str, str]:
     audio_environment = os.environ.copy()
+    audio_environment.pop("USDA_FDC_API_KEY", None)
     for variable in ("SNACK_GPT_MICROPHONE", "SNACK_GPT_SPEAKER"):
         if variable in environment:
             audio_environment[variable] = environment[variable]
     return audio_environment
+
+
+def _default_elevation() -> tuple[str, ...]:
+    get_effective_user_id = getattr(os, "geteuid", None)
+    if not callable(get_effective_user_id):
+        raise ConfigurationError("start is available only on a systemd appliance")
+    return () if get_effective_user_id() == 0 else ("sudo",)
+
+
+def _web_url(settings: Settings) -> str:
+    host = f"[{settings.host}]" if ":" in settings.host else settings.host
+    return f"http://{host}:{settings.port}/"
 
 
 def start(
@@ -63,6 +78,16 @@ def start(
             file=sys.stderr,
         )
         return 2
+    try:
+        settings = Settings.from_environment(environment)
+        elevation = (
+            tuple(elevated_command)
+            if elevated_command is not None
+            else _default_elevation()
+        )
+    except ConfigurationError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        return 2
 
     print("Checking the configured microphone and speaker...")
     try:
@@ -75,9 +100,6 @@ def start(
         print("Audio check failed; services were not enabled.", file=sys.stderr)
         return 1
 
-    elevation = tuple(elevated_command) if elevated_command is not None else (
-        () if os.geteuid() == 0 else ("sudo",)
-    )
     try:
         subprocess.run(
             [*elevation, "systemctl", "enable", "--now", *SERVICES],
@@ -86,5 +108,5 @@ def start(
     except (OSError, subprocess.CalledProcessError):
         print("Could not enable and start Snack-GPT services.", file=sys.stderr)
         return 1
-    print("Snack-GPT is started. Open http://127.0.0.1:8000/.")
+    print(f"Snack-GPT is started. Open {_web_url(settings)}.")
     return 0

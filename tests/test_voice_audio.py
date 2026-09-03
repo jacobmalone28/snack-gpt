@@ -27,6 +27,7 @@ class VoiceAudioTests(unittest.TestCase):
         environment = {
             "SNACK_GPT_MICROPHONE": "hw:2,0",
             "SNACK_GPT_SPEAKER": "hw:3,0",
+            "USDA_FDC_API_KEY": "private-key",
         }
         with patch.dict(os.environ, environment, clear=True), patch(
             "snack_gpt.voice_audio.subprocess.run"
@@ -51,9 +52,11 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertEqual(capture_result, 0)
         self.assertEqual(play_result, 0)
         self.assertEqual(capture_environment["AUDIODEV"], "hw:2,0")
+        self.assertNotIn("USDA_FDC_API_KEY", capture_environment)
         self.assertIn("1.25", capture_command)
         self.assertEqual(play_command, ["play", "--no-show-progress", "report.wav"])
         self.assertEqual(play_environment["AUDIODEV"], "hw:3,0")
+        self.assertNotIn("USDA_FDC_API_KEY", play_environment)
 
     def test_audio_failure_does_not_echo_command_details(self) -> None:
         stderr = StringIO()

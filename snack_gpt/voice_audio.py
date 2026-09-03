@@ -11,6 +11,7 @@ import tempfile
 
 def _audio_environment(variable: str) -> dict[str, str]:
     environment = os.environ.copy()
+    environment.pop("USDA_FDC_API_KEY", None)
     device = os.environ.get(variable, "").strip()
     if device:
         environment["AUDIODEV"] = device

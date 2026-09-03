@@ -23,6 +23,7 @@ class AppliancePackagingTests(unittest.TestCase):
         self.assertIn("ExecStartPost=/bin/sh", source)
         self.assertIn("RestartPreventExitStatus=2", source)
         self.assertIn('id "$SERVICE_USER"', source)
+        self.assertIn('install -d -m 0700 "$STATE_DIRECTORY"', source)
         self.assertIn("systemctl disable", source)
         self.assertNotIn("systemctl enable --now", source)
 

@@ -242,7 +242,8 @@ PY
 chmod -R a+rX "$PREFIX"
 
 echo "Installing Snack-GPT application configuration..."
-install -d -m 0755 "$CONFIG_DIRECTORY" "$STATE_DIRECTORY"
+install -d -m 0755 "$CONFIG_DIRECTORY"
+install -d -m 0700 "$STATE_DIRECTORY"
 cat >"$CONFIG_DIRECTORY/voice.json" <<EOF
 {
     "memory_directory": "/dev/shm",
