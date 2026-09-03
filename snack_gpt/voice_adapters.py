@@ -167,49 +167,25 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
     needle_factory = cast(Callable[..., object], getattr(needle_module, "Needle"))
     schema = {
         "name": "log_food_intake",
-        "description": (
-            "Extract only foods and Food Quantities explicitly spoken by the owner. "
-            "For example, 'I ate 2 eggs' means food 'egg', quantity 2, measure 'egg'."
-        ),
+        "description": "Record one food and its explicit Food Quantity.",
         "parameters": {
             "type": "object",
             "properties": {
-                "foods": {
-                    "type": "array",
-                    "description": "The foods the owner consumed, preserving repetitions.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "food": {
-                                "type": "string",
-                                "description": (
-                                    "Food name only, excluding its number and measure. Use a singular count-food "
-                                    "name when it is also the measure; for '2 eggs', use 'egg'. Preserve spoken "
-                                    "preparation, form, and other food qualifiers."
-                                ),
-                            },
-                            "quantity": {
-                                "type": "number",
-                                "description": (
-                                    "The exact finite number explicitly spoken by the owner; for '2 eggs', use 2."
-                                ),
-                                "exclusiveMinimum": 0,
-                            },
-                            "measure": {
-                                "type": "string",
-                                "description": (
-                                    "The spoken unit only, without explanatory text. For a counted food, use its "
-                                    "singular food name; for '2 eggs', use 'egg'. Never invent a conversion factor."
-                                ),
-                            },
-                        },
-                        "required": ["food", "quantity", "measure"],
-                        "additionalProperties": False,
-                    },
-                    "minItems": 1,
-                }
+                "food_name": {
+                    "type": "string",
+                    "description": "Food name only, excluding its quantity and unit.",
+                },
+                "quantity": {
+                    "type": "number",
+                    "description": "The exact finite number explicitly spoken by the owner.",
+                    "exclusiveMinimum": 0,
+                },
+                "unit": {
+                    "type": "string",
+                    "description": "The spoken unit only, without explanatory text.",
+                },
             },
-            "required": ["foods"],
+            "required": ["food_name", "quantity", "unit"],
             "additionalProperties": False,
         },
     }
@@ -223,13 +199,21 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
     if isinstance(response_value, Mapping):
         response = cast(Mapping[object, object], response_value)
         calls_value = response.get("function_calls")
-        if isinstance(calls_value, list) and len(calls_value) == 1:
-            call = calls_value[0]
+        calls = cast(list[object], calls_value) if isinstance(calls_value, list) else []
+        if len(calls) == 1:
+            call = calls[0]
             if isinstance(call, Mapping):
                 arguments = cast(Mapping[object, object], call).get("arguments")
                 if isinstance(arguments, Mapping):
+                    food = cast(Mapping[object, object], arguments)
                     result = {
-                        "foods": cast(Mapping[object, object], arguments).get("foods"),
+                        "foods": [
+                            {
+                                "food": food.get("food_name"),
+                                "quantity": food.get("quantity"),
+                                "measure": food.get("unit"),
+                            }
+                        ],
                         "confidence": response.get("confidence"),
                     }
     report = parse_consumption_report(result)

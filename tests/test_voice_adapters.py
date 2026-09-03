@@ -161,7 +161,7 @@ class VoiceAdapterTests(unittest.TestCase):
                 "    def __init__(self, tools, weights=None): pass\n"
                 "    def complete(self, text):\n"
                 "        return {'confidence': 1, 'function_calls': "
-                "[{'arguments': {'foods': [{'food': 'egg', 'quantity': 1}]}}]}\n",
+                "[{'arguments': {'food_name': 'egg', 'quantity': 1}}]}\n",
                 encoding="utf-8",
             )
             transcript = root / "transcript.txt"
@@ -187,7 +187,7 @@ class VoiceAdapterTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 1)
-            self.assertIn("food, quantity, and measure", result.stderr)
+            self.assertIn("extracted measure must be non-blank text", result.stderr)
             self.assertFalse(extraction.exists())
 
     def test_adapters_normalize_runtime_outputs(self) -> None:
@@ -216,17 +216,14 @@ class VoiceAdapterTests(unittest.TestCase):
                 "    def __init__(self, tools, weights=None):\n"
                 "        schema = tools[0]\n"
                 "        assert schema['name'] == 'log_food_intake'\n"
-                "        item = schema['parameters']['properties']['foods']['items']\n"
-                "        assert item['required'] == ['food', 'quantity', 'measure']\n"
-                "        assert item['properties']['quantity']['exclusiveMinimum'] == 0\n"
-                "        assert \"food 'egg', quantity 2, measure 'egg'\" in schema['description']\n"
-                "        assert \"for '2 eggs', use 2\" in item['properties']['quantity']['description']\n"
-                "        assert schema['parameters']['required'] == ['foods']\n"
+                "        parameters = schema['parameters']\n"
+                "        assert parameters['required'] == ['food_name', 'quantity', 'unit']\n"
+                "        assert parameters['properties']['quantity']['exclusiveMinimum'] == 0\n"
                 "        assert 'confidence' not in schema['parameters']['properties']\n"
                 "    def complete(self, text):\n"
                 "        return {'confidence': 0.9, 'function_calls': "
-                "[{'arguments': {'foods': [{'food': 'white rice cooked', "
-                "'quantity': 0.75, 'measure': 'cup'}]}}]}\n",
+                "[{'arguments': {'food_name': 'white rice cooked', "
+                "'quantity': 0.75, 'unit': 'cup'}}]}\n",
                 encoding="utf-8",
             )
             fake_binary = root / "fake_binary.py"
