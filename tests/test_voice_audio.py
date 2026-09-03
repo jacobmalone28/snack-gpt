@@ -18,10 +18,16 @@ class VoiceAudioTests(unittest.TestCase):
             )
 
         self.assertEqual(result, 0)
-        command = run_command.call_args.args[0]
-        self.assertEqual(command[0], "rec")
-        self.assertNotIn("AUDIODEV", run_command.call_args.kwargs["env"])
-        self.assertIn("wake.wav", command)
+        self.assertEqual(run_command.call_count, 2)
+        capture_call, conversion_call = run_command.call_args_list
+        self.assertEqual(capture_call.args[0][0], "rec")
+        self.assertNotIn("--rate", capture_call.args[0])
+        self.assertNotIn("AUDIODEV", capture_call.kwargs["env"])
+        self.assertEqual(conversion_call.args[0][0], "sox")
+        self.assertEqual(
+            conversion_call.args[0][-7:],
+            ["--channels", "1", "--rate", "16000", "--bits", "16", "wake.wav"],
+        )
 
     def test_audio_device_overrides_are_forwarded_to_sox(self) -> None:
         environment = {
@@ -43,8 +49,9 @@ class VoiceAudioTests(unittest.TestCase):
                     "report.wav",
                 ]
             )
-            capture_command = run_command.call_args.args[0]
-            capture_environment = run_command.call_args.kwargs["env"]
+            capture_calls = run_command.call_args_list
+            capture_command = capture_calls[0].args[0]
+            capture_environment = capture_calls[0].kwargs["env"]
             play_result = voice_audio.main(["play", "report.wav"])
             play_command = run_command.call_args.args[0]
             play_environment = run_command.call_args.kwargs["env"]

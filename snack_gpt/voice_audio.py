@@ -9,16 +9,16 @@ import sys
 import tempfile
 
 
-def _audio_environment(variable: str) -> dict[str, str]:
+def _audio_environment(variable: str | None) -> dict[str, str]:
     environment = os.environ.copy()
     environment.pop("USDA_FDC_API_KEY", None)
-    device = os.environ.get(variable, "").strip()
+    device = os.environ.get(variable, "").strip() if variable is not None else ""
     if device:
         environment["AUDIODEV"] = device
     return environment
 
 
-def _run(command: Sequence[str], *, device_variable: str) -> int:
+def _run(command: Sequence[str], *, device_variable: str | None = None) -> int:
     try:
         subprocess.run(
             command,
@@ -35,22 +35,39 @@ def _run(command: Sequence[str], *, device_variable: str) -> int:
 
 
 def _capture(mode: str, output: Path, silence_seconds: float) -> int:
-    command = [
-        "rec",
-        "--no-show-progress",
-        "--channels",
-        "1",
-        "--rate",
-        "16000",
-        "--bits",
-        "16",
-        str(output),
-    ]
-    if mode == "wake":
-        command.extend(["trim", "0", "1.5"])
-    else:
-        command.extend(["silence", "1", "0.1", "1%", "1", str(silence_seconds), "1%"])
-    return _run(command, device_variable="SNACK_GPT_MICROPHONE")
+    with tempfile.NamedTemporaryFile(
+        prefix="snack-gpt-native-",
+        suffix=".wav",
+        dir=output.parent,
+        delete=False,
+    ) as temporary:
+        native_audio = Path(temporary.name)
+    try:
+        capture_command = ["rec", "--no-show-progress", str(native_audio)]
+        if mode == "wake":
+            capture_command.extend(["trim", "0", "1.5"])
+        else:
+            capture_command.extend(
+                ["silence", "1", "0.1", "1%", "1", str(silence_seconds), "1%"]
+            )
+        if _run(capture_command, device_variable="SNACK_GPT_MICROPHONE") != 0:
+            return 1
+        return _run(
+            [
+                "sox",
+                "--no-show-progress",
+                str(native_audio),
+                "--channels",
+                "1",
+                "--rate",
+                "16000",
+                "--bits",
+                "16",
+                str(output),
+            ]
+        )
+    finally:
+        native_audio.unlink(missing_ok=True)
 
 
 def _play(audio: Path) -> int:
