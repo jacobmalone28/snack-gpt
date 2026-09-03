@@ -91,7 +91,9 @@ def parse_consumption_report(value: object) -> ExtractedConsumptionReport:
     ):
         raise ExtractionError("extraction confidence must be a finite number from zero to one")
     if confidence < MIN_EXTRACTION_CONFIDENCE:
-        raise ExtractionError("I could not confidently identify every Food Quantity.")
+        raise ExtractionError(
+            f"I could not confidently identify every Food Quantity (confidence {confidence:.3f})."
+        )
 
     foods = extraction["foods"]
     if not isinstance(foods, list):

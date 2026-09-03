@@ -322,7 +322,10 @@ class VoiceTests(unittest.TestCase):
                 self.assertEqual(storage.list_consumption_events(), [])
 
         self.assertEqual(usda_search.queries, [])
-        self.assertEqual(runtime.failure_reason, "I could not confidently identify every Food Quantity.")
+        self.assertEqual(
+            runtime.failure_reason,
+            "I could not confidently identify every Food Quantity (confidence 0.500).",
+        )
         self.assertEqual(runtime.calls, ["capture", "transcribe", "extract", "failure"])
 
     def test_invalid_item_rejects_the_entire_voice_report(self) -> None:
