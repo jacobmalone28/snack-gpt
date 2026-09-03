@@ -126,7 +126,8 @@ echo "Installing pinned Python runtimes..."
 "${PIP[@]}" install --no-deps \
     "openwakeword==$OPENWAKEWORD_VERSION" \
     "cactus-needle==$NEEDLE_VERSION"
-"${PIP[@]}" install --no-deps "$REPOSITORY_ROOT"
+"${PIP[@]}" install "$REPOSITORY_ROOT"
+"$PYTHON" -c "from snack_gpt.__main__ import main"
 
 echo "Downloading OpenWakeWord models..."
 "$PYTHON" - "$MODELS" <<'PY'

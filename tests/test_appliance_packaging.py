@@ -37,6 +37,13 @@ class AppliancePackagingTests(unittest.TestCase):
         self.assertIn('"wake_capture"', source)
         self.assertIn('"play_speech"', source)
 
+    def test_provisioner_installs_application_runtime_dependencies(self) -> None:
+        source = self.provisioner.read_text(encoding="utf-8")
+
+        self.assertIn('"${PIP[@]}" install "$REPOSITORY_ROOT"', source)
+        self.assertNotIn('"${PIP[@]}" install --no-deps "$REPOSITORY_ROOT"', source)
+        self.assertIn('"openwakeword==$OPENWAKEWORD_VERSION"', source)
+
     def test_platform_guide_covers_every_supported_target(self) -> None:
         guide = (self.root / "docs" / "installation.md").read_text(encoding="utf-8")
 
