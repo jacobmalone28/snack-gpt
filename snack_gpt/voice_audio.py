@@ -14,6 +14,7 @@ def _audio_environment(variable: str | None) -> dict[str, str]:
     environment.pop("USDA_FDC_API_KEY", None)
     device = os.environ.get(variable, "").strip() if variable is not None else ""
     if device:
+        environment["AUDIODRIVER"] = "alsa"
         environment["AUDIODEV"] = device
     return environment
 

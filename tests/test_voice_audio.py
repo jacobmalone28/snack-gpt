@@ -59,10 +59,12 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertEqual(capture_result, 0)
         self.assertEqual(play_result, 0)
         self.assertEqual(capture_environment["AUDIODEV"], "hw:2,0")
+        self.assertEqual(capture_environment["AUDIODRIVER"], "alsa")
         self.assertNotIn("USDA_FDC_API_KEY", capture_environment)
         self.assertIn("1.25", capture_command)
         self.assertEqual(play_command, ["play", "--no-show-progress", "report.wav"])
         self.assertEqual(play_environment["AUDIODEV"], "hw:3,0")
+        self.assertEqual(play_environment["AUDIODRIVER"], "alsa")
         self.assertNotIn("USDA_FDC_API_KEY", play_environment)
 
     def test_audio_failure_does_not_echo_command_details(self) -> None:
