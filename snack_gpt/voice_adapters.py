@@ -173,20 +173,18 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
             "properties": {
                 "food_name": {
                     "type": "string",
-                    "description": "Food name only, excluding its quantity and unit.",
+                    "description": "Food name only",
                 },
                 "quantity": {
                     "type": "number",
-                    "description": "The exact finite number explicitly spoken by the owner.",
-                    "exclusiveMinimum": 0,
+                    "description": "the amount of the food",
                 },
                 "unit": {
                     "type": "string",
-                    "description": "The spoken unit only, without explanatory text.",
+                    "description": "the unit the quantity is in",
                 },
             },
             "required": ["food_name", "quantity", "unit"],
-            "additionalProperties": False,
         },
     }
     needle_arguments: dict[str, object] = {"tools": [schema]}
