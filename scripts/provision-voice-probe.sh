@@ -218,6 +218,7 @@ EOF
 }
 
 write_adapter "$BIN/openwakeword-probe" wake
+write_adapter "$BIN/openwakeword-worker" wake-worker
 write_adapter "$BIN/whisper-probe" transcribe
 write_adapter "$BIN/needle-probe" extract
 write_adapter "$BIN/piper-probe" synthesize
@@ -271,7 +272,7 @@ cat >"$CONFIG_DIRECTORY/voice.json" <<EOF
     "memory_directory": "/dev/shm",
     "commands": {
         "wake_capture": ["$BIN/voice-audio", "capture", "--mode", "wake", "--output", "{audio}"],
-        "wake_detection": ["$BIN/openwakeword-probe", "--model", "$MODELS/hey_jarvis_v0.1.onnx", "--audio", "{audio}", "--output", "{output}"],
+        "wake_detection": ["$BIN/openwakeword-probe", "--socket", "/run/snack-gpt-wake/wake.sock", "--audio", "{audio}", "--output", "{output}"],
         "wake_sound": ["$BIN/voice-audio", "tone", "wake"],
         "speech_capture": ["$BIN/voice-audio", "capture", "--mode", "speech", "--silence-seconds", "{silence_seconds}", "--output", "{audio}"],
         "transcription": ["$BIN/whisper-probe", "--binary", "$BIN/whisper-cli", "--binary-argument=-ac", "--binary-argument=512", "--model", "$MODELS/ggml-tiny.en.bin", "--audio", "{audio}", "--output", "{output}"],
@@ -338,11 +339,27 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+cat >/etc/systemd/system/snack-gpt-wake.service <<EOF
+[Unit]
+Description=Snack-GPT wake-word worker
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+RuntimeDirectory=snack-gpt-wake
+ExecStart=$BIN/openwakeword-worker --model $MODELS/hey_jarvis_v0.1.onnx --socket /run/snack-gpt-wake/wake.sock
+ExecStartPost=/bin/sh -c 'attempt=0; while [ ! -S /run/snack-gpt-wake/wake.sock ] && [ "\$attempt" -lt 300 ]; do attempt=\$((attempt + 1)); sleep 0.1; done; [ -S /run/snack-gpt-wake/wake.sock ]'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
 cat >/etc/systemd/system/snack-gpt-listener.service <<EOF
 [Unit]
 Description=Snack-GPT voice listener
-After=network.target snack-gpt-piper.service
-Requires=snack-gpt-piper.service
+After=network.target snack-gpt-wake.service snack-gpt-piper.service
+Requires=snack-gpt-wake.service snack-gpt-piper.service
 
 [Service]
 Type=simple
@@ -357,7 +374,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl disable snack-gpt-web.service snack-gpt-piper.service snack-gpt-listener.service
+systemctl disable snack-gpt-web.service snack-gpt-wake.service snack-gpt-piper.service snack-gpt-listener.service
 echo
 echo "Provisioning complete. Services are installed disabled."
 echo "Set USDA_FDC_API_KEY in $CONFIG_DIRECTORY/environment, then start as $SERVICE_USER:"

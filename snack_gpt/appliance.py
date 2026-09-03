@@ -14,6 +14,7 @@ from snack_gpt.config import ConfigurationError, Settings
 
 SERVICES = (
     "snack-gpt-web.service",
+    "snack-gpt-wake.service",
     "snack-gpt-piper.service",
     "snack-gpt-listener.service",
 )

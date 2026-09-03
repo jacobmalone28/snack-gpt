@@ -46,6 +46,7 @@ class ApplianceTests(unittest.TestCase):
                     "enable",
                     "--now",
                     "snack-gpt-web.service",
+                    "snack-gpt-wake.service",
                     "snack-gpt-piper.service",
                     "snack-gpt-listener.service",
                 ],

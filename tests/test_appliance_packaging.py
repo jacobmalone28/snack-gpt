@@ -19,6 +19,7 @@ class AppliancePackagingTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("snack-gpt-web.service", source)
+        self.assertIn("snack-gpt-wake.service", source)
         self.assertIn("snack-gpt-listener.service", source)
         self.assertIn("ExecStartPost=/bin/sh", source)
         self.assertIn("RestartPreventExitStatus=2", source)
@@ -37,6 +38,8 @@ class AppliancePackagingTests(unittest.TestCase):
         self.assertIn("-m snack_gpt.voice_audio", source)
         self.assertIn('"memory_directory": "/dev/shm"', source)
         self.assertIn('"wake_capture"', source)
+        self.assertIn('write_adapter "$BIN/openwakeword-worker" wake-worker', source)
+        self.assertIn('"--socket", "/run/snack-gpt-wake/wake.sock"', source)
         self.assertIn('"play_speech"', source)
 
     def test_provisioner_installs_application_runtime_dependencies(self) -> None:

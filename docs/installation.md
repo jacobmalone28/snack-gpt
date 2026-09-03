@@ -36,8 +36,10 @@ explicitly with `--capture-device plughw:CARD,DEVICE` and
 
 The provisioner installs the application, pinned voice runtimes and models,
 `/etc/snack-gpt/voice.json`, `/etc/snack-gpt/environment`, and native systemd
-units. All units are installed disabled. Edit the environment file and set
-`USDA_FDC_API_KEY` before starting the listener.
+units. The dedicated wake worker keeps OpenWakeWord loaded between captures so
+the listener does not stop listening while the model starts. All units are
+installed disabled. Edit the environment file and set `USDA_FDC_API_KEY` before
+starting the listener.
 
 The provisioner writes the selected devices to `SNACK_GPT_MICROPHONE` and
 `SNACK_GPT_SPEAKER` in `/etc/snack-gpt/environment`. To change devices later,
@@ -59,7 +61,7 @@ snackgpt start
 ```
 
 The command records and plays a short audio sample. It enables and starts all
-three systemd services only when audio succeeds and the USDA key is configured.
+four systemd services only when audio succeeds and the USDA key is configured.
 
 Follow [raspberry-pi-acceptance.md](raspberry-pi-acceptance.md) before treating
 the installation as accepted.
