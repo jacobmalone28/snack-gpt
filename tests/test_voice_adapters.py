@@ -219,6 +219,8 @@ class VoiceAdapterTests(unittest.TestCase):
                 "        item = schema['parameters']['properties']['foods']['items']\n"
                 "        assert item['required'] == ['food', 'quantity', 'measure']\n"
                 "        assert item['properties']['quantity']['exclusiveMinimum'] == 0\n"
+                "        assert \"food 'egg', quantity 2, measure 'egg'\" in schema['description']\n"
+                "        assert \"for '2 eggs', use 2\" in item['properties']['quantity']['description']\n"
                 "        assert schema['parameters']['required'] == ['foods']\n"
                 "        assert 'confidence' not in schema['parameters']['properties']\n"
                 "    def complete(self, text):\n"

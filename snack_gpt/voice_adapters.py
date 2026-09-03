@@ -167,7 +167,10 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
     needle_factory = cast(Callable[..., object], getattr(needle_module, "Needle"))
     schema = {
         "name": "log_food_intake",
-        "description": "Extract foods and their explicit Food Quantities from the owner's words.",
+        "description": (
+            "Extract only foods and Food Quantities explicitly spoken by the owner. "
+            "For example, 'I ate 2 eggs' means food 'egg', quantity 2, measure 'egg'."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -180,19 +183,23 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
                             "food": {
                                 "type": "string",
                                 "description": (
-                                    "USDA search term preserving spoken preparation, form, and other "
-                                    "food qualifiers; never a USDA identifier or claimed canonical description."
+                                    "Food name only, excluding its number and measure. Use a singular count-food "
+                                    "name when it is also the measure; for '2 eggs', use 'egg'. Preserve spoken "
+                                    "preparation, form, and other food qualifiers."
                                 ),
                             },
                             "quantity": {
                                 "type": "number",
-                                "description": "Finite numeric quantity explicitly spoken by the owner.",
+                                "description": (
+                                    "The exact finite number explicitly spoken by the owner; for '2 eggs', use 2."
+                                ),
                                 "exclusiveMinimum": 0,
                             },
                             "measure": {
                                 "type": "string",
                                 "description": (
-                                    "Spoken unit or food measure only; never a gram weight or conversion factor."
+                                    "The spoken unit only, without explanatory text. For a counted food, use its "
+                                    "singular food name; for '2 eggs', use 'egg'. Never invent a conversion factor."
                                 ),
                             },
                         },
