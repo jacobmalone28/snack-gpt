@@ -12,11 +12,12 @@ WHISPER_COMMIT=41fc9dea6a4fe056424be86f61164413903fcff4
 WHISPER_MODEL_SHA1=c78c86eb1a8faa21b369bcd33207cc90d64ae9df
 FIXTURE_SOURCE=
 CAPTURE_DEVICE=
+PLAYBACK_DEVICE=
 ACCEPT_LICENSES=false
 
 usage() {
     cat <<'EOF'
-Usage: sudo scripts/provision-voice-probe.sh --accept-model-licenses [--fixture FILE] [--capture-device DEVICE]
+Usage: sudo scripts/provision-voice-probe.sh --accept-model-licenses [--fixture FILE] [--capture-device DEVICE] [--playback-device DEVICE]
 
 Installs the local voice acceptance stack under /opt/snack-gpt. Without
 --fixture, the script records a seven-second 16 kHz mono WAV from the default
@@ -24,6 +25,7 @@ ALSA capture device. When exactly one hardware capture device exists, the
 script selects it automatically.
 
 --capture-device uses an explicit ALSA device such as plughw:1,0.
+--playback-device uses an explicit ALSA device such as plughw:0,0.
 
 --accept-model-licenses acknowledges OpenWakeWord's CC BY-NC-SA 4.0 model
 license and the Piper voice MODEL_CARD fetched during provisioning.
@@ -44,6 +46,11 @@ while (($#)); do
         --capture-device)
             [[ $# -ge 2 ]] || { echo "--capture-device requires a device" >&2; exit 2; }
             CAPTURE_DEVICE=$2
+            shift 2
+            ;;
+        --playback-device)
+            [[ $# -ge 2 ]] || { echo "--playback-device requires a device" >&2; exit 2; }
+            PLAYBACK_DEVICE=$2
             shift 2
             ;;
         -h|--help)
@@ -83,7 +90,7 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     alsa-utils bubblewrap build-essential ca-certificates cmake curl git \
     libopenblas-dev python3 python3-pip python3-venv sox libsox-fmt-alsa
-if [[ -z $FIXTURE_SOURCE && -z $CAPTURE_DEVICE ]]; then
+if [[ -z $CAPTURE_DEVICE ]]; then
     mapfile -t CAPTURE_DEVICES < <(
         LC_ALL=C arecord --list-devices 2>/dev/null |
             sed -nE 's/^card ([0-9]+):.*device ([0-9]+):.*/plughw:\1,\2/p'
@@ -94,6 +101,20 @@ if [[ -z $FIXTURE_SOURCE && -z $CAPTURE_DEVICE ]]; then
         echo "Expected one ALSA hardware capture device; found ${#CAPTURE_DEVICES[@]}." >&2
         arecord --list-devices >&2 || true
         echo "Rerun with --capture-device DEVICE (for example, plughw:1,0)." >&2
+        exit 1
+    fi
+fi
+if [[ -z $PLAYBACK_DEVICE ]]; then
+    mapfile -t PLAYBACK_DEVICES < <(
+        LC_ALL=C aplay --list-devices 2>/dev/null |
+            sed -nE 's/^card ([0-9]+):.*device ([0-9]+):.*/plughw:\1,\2/p'
+    )
+    if (( ${#PLAYBACK_DEVICES[@]} == 1 )); then
+        PLAYBACK_DEVICE=${PLAYBACK_DEVICES[0]}
+    else
+        echo "Expected one ALSA hardware playback device; found ${#PLAYBACK_DEVICES[@]}." >&2
+        aplay --list-devices >&2 || true
+        echo "Rerun with --playback-device DEVICE (for example, plughw:0,0)." >&2
         exit 1
     fi
 fi
@@ -268,8 +289,8 @@ SNACK_GPT_HOST=127.0.0.1
 SNACK_GPT_PORT=8000
 SNACK_GPT_VOICE_MANIFEST=$CONFIG_DIRECTORY/voice.json
 # USDA_FDC_API_KEY=
-# SNACK_GPT_MICROPHONE=
-# SNACK_GPT_SPEAKER=
+SNACK_GPT_MICROPHONE=$CAPTURE_DEVICE
+SNACK_GPT_SPEAKER=$PLAYBACK_DEVICE
 EOF
 SERVICE_USER=${SUDO_USER:-}
 [[ -n $SERVICE_USER && $SERVICE_USER != root ]] || {

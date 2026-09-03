@@ -30,15 +30,19 @@ On a Raspberry Pi 3B+, check out the intended release and run:
 sudo scripts/provision-voice-probe.sh --accept-model-licenses
 ```
 
+When more than one ALSA capture or playback device is available, select them
+explicitly with `--capture-device plughw:CARD,DEVICE` and
+`--playback-device plughw:CARD,DEVICE`.
+
 The provisioner installs the application, pinned voice runtimes and models,
 `/etc/snack-gpt/voice.json`, `/etc/snack-gpt/environment`, and native systemd
 units. All units are installed disabled. Edit the environment file and set
 `USDA_FDC_API_KEY` before starting the listener.
 
-SoX uses the system-default microphone and speaker when no override is set. To
-select different devices, set `SNACK_GPT_MICROPHONE` and
-`SNACK_GPT_SPEAKER` in `/etc/snack-gpt/environment` to device names accepted by
-SoX on that host. Verify recording and playback as the service account:
+The provisioner writes the selected devices to `SNACK_GPT_MICROPHONE` and
+`SNACK_GPT_SPEAKER` in `/etc/snack-gpt/environment`. To change devices later,
+set those variables to device names accepted by SoX on that host. Verify
+recording and playback as the service account:
 
 ```console
 set -a

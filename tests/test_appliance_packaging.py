@@ -30,8 +30,10 @@ class AppliancePackagingTests(unittest.TestCase):
     def test_provisioner_generates_runtime_manifest_with_audio_overrides(self) -> None:
         source = self.provisioner.read_text(encoding="utf-8")
 
-        self.assertIn("SNACK_GPT_MICROPHONE", source)
-        self.assertIn("SNACK_GPT_SPEAKER", source)
+        self.assertIn("SNACK_GPT_MICROPHONE=$CAPTURE_DEVICE", source)
+        self.assertIn("SNACK_GPT_SPEAKER=$PLAYBACK_DEVICE", source)
+        self.assertIn("--playback-device", source)
+        self.assertIn("aplay --list-devices", source)
         self.assertIn("-m snack_gpt.voice_audio", source)
         self.assertIn('"memory_directory": "/dev/shm"', source)
         self.assertIn('"wake_capture"', source)
