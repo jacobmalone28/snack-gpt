@@ -20,6 +20,13 @@ from snack_gpt.voice_runtime import VoiceManifest
 
 
 class CliTests(unittest.TestCase):
+    def test_start_runs_appliance_preflight_and_services(self) -> None:
+        with patch("snack_gpt.__main__.start_appliance", return_value=0) as start:
+            result = run(["start"])
+
+        self.assertEqual(result, 0)
+        start.assert_called_once_with()
+
     def test_listen_resumes_after_feedback_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = Path(directory) / "voice.json"

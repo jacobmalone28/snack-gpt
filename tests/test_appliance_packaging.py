@@ -81,6 +81,11 @@ class AppliancePackagingTests(unittest.TestCase):
         self.assertIn("GPL-3.0-or-later", guide)
         self.assertIn("en_US-lessac-low", guide)
 
+    def test_package_exposes_simple_start_command(self) -> None:
+        configuration = (self.root / "pyproject.toml").read_text(encoding="utf-8")
+
+        self.assertIn('snackgpt = "snack_gpt.__main__:main"', configuration)
+
 
 if __name__ == "__main__":
     unittest.main()

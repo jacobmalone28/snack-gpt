@@ -336,8 +336,8 @@ systemctl daemon-reload
 systemctl disable snack-gpt-web.service snack-gpt-piper.service snack-gpt-listener.service
 echo
 echo "Provisioning complete. Services are installed disabled."
-echo "As $SERVICE_USER, verify audio before enabling them:"
-echo "  $BIN/voice-audio check"
+echo "Set USDA_FDC_API_KEY in $CONFIG_DIRECTORY/environment, then start as $SERVICE_USER:"
+echo "  $VENV/bin/snackgpt start"
 echo "Then run the acceptance probe:"
 echo "  cd $REPOSITORY_ROOT"
 echo "  $PYTHON -m snack_gpt.voice_probe docs/voice-probe.pi.json --output voice-probe-results.json"

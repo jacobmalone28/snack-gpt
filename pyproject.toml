@@ -11,6 +11,7 @@ dependencies = ["python-dotenv>=1.0,<2"]
 
 [project.scripts]
 snack-gpt = "snack_gpt.__main__:main"
+snackgpt = "snack_gpt.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["snack_gpt"]

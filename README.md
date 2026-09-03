@@ -138,3 +138,5 @@ probe and complete appliance acceptance procedure are in
 runs all local inference stages without network access and records their timings
 and peak memory; physical appliance acceptance additionally verifies audio,
 wake reliability, web workflows, degraded states, and restart persistence.
+After Pi provisioning and USDA configuration, `snackgpt start` checks the
+configured microphone and speaker before enabling and starting the appliance.

@@ -47,13 +47,15 @@ set +a
 /opt/snack-gpt/bin/voice-audio check
 ```
 
-Only after that command records and plays understandable audio, initialize the
-database and password as needed, then enable the appliance:
+Set the owner password if LAN access is configured, then run the one-command
+audio check and appliance startup:
 
 ```console
-sudo systemctl enable --now snack-gpt-web.service
-sudo systemctl enable --now snack-gpt-piper.service snack-gpt-listener.service
+snackgpt start
 ```
+
+The command records and plays a short audio sample. It enables and starts all
+three systemd services only when audio succeeds and the USDA key is configured.
 
 Follow [raspberry-pi-acceptance.md](raspberry-pi-acceptance.md) before treating
 the installation as accepted.

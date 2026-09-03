@@ -9,6 +9,7 @@ from wsgiref.simple_server import make_server
 
 from dotenv import load_dotenv
 
+from snack_gpt.appliance import start as start_appliance
 from snack_gpt.auth import hash_password
 from snack_gpt.config import ConfigurationError, Settings
 from snack_gpt.http import create_application
@@ -24,9 +25,12 @@ from snack_gpt.voice_runtime import CommandVoiceRuntime, VoiceRuntimeError, load
 
 def run(arguments: Sequence[str]) -> int:
     command = tuple(arguments)
-    if command not in (("check",), ("listen",), ("serve",), ("set-password",)):
-        print("Usage: snack-gpt {check,listen,serve,set-password}", file=sys.stderr)
+    if command not in (("check",), ("listen",), ("serve",), ("set-password",), ("start",)):
+        print("Usage: snack-gpt {check,listen,serve,set-password,start}", file=sys.stderr)
         return 2
+
+    if command == ("start",):
+        return start_appliance()
 
     load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 
