@@ -221,7 +221,7 @@ class VoiceAdapterTests(unittest.TestCase):
                 "        assert parameters['properties']['quantity']['exclusiveMinimum'] == 0\n"
                 "        assert 'confidence' not in schema['parameters']['properties']\n"
                 "    def complete(self, text):\n"
-                "        return {'confidence': 0.9, 'function_calls': "
+                "        return {'confidence': 0.0, 'function_calls': "
                 "[{'arguments': {'food_name': 'white rice cooked', "
                 "'quantity': 0.75, 'unit': 'cup'}}]}\n",
                 encoding="utf-8",

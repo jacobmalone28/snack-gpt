@@ -214,7 +214,7 @@ def _extract(model_path: Path | None, library_path: Path | None, transcript_path
                                 "measure": food.get("unit"),
                             }
                         ],
-                        "confidence": response.get("confidence"),
+                        "confidence": 1.0,
                     }
     report = parse_consumption_report(result)
     _write_json(
