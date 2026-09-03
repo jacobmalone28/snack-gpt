@@ -33,6 +33,7 @@ class VoiceAudioTests(unittest.TestCase):
         self.assertEqual(run_command.call_count, 2)
         capture_call, conversion_call = run_command.call_args_list
         self.assertEqual(capture_call.args[0][0], "rec")
+        self.assertEqual(capture_call.args[0][-3:], ["trim", "0", "5"])
         self.assertNotIn("--rate", capture_call.args[0])
         self.assertNotIn("AUDIODEV", capture_call.kwargs["env"])
         self.assertEqual(conversion_call.args[0][0], "sox")

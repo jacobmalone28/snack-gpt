@@ -46,7 +46,7 @@ def _capture(mode: str, output: Path, silence_seconds: float) -> int:
     try:
         capture_command = ["rec", "--no-show-progress", str(native_audio)]
         if mode == "wake":
-            capture_command.extend(["trim", "0", "1.5"])
+            capture_command.extend(["trim", "0", "5"])
         else:
             capture_command.extend(
                 ["silence", "1", "0.1", "1%", "1", str(silence_seconds), "1%"]
@@ -98,7 +98,7 @@ def _tone(kind: str) -> int:
 def _check() -> int:
     with tempfile.TemporaryDirectory(prefix="snack-gpt-audio-") as directory:
         recording = Path(directory) / "check.wav"
-        print("Recording 1.5 seconds from the configured microphone...")
+        print("Recording 5 seconds from the configured microphone...")
         if _capture("wake", recording, 1.0) != 0:
             return 1
         print("Playing the recording through the configured speaker...")
