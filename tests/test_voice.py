@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import wave
 
 from snack_gpt.ingestion import FoodSearchResult
 from snack_gpt.storage import ConsumptionEvent, NutritionSnapshot, Storage, VoiceStatus
@@ -170,9 +171,14 @@ class ControlledCommands:
             self.paths.append(path)
         if name == "wake-capture":
             assert path is not None
-            path.write_bytes(b"wake audio")
+            with wave.open(str(path), "wb") as audio:
+                audio.setnchannels(1)
+                audio.setsampwidth(2)
+                audio.setframerate(16000)
+                audio.writeframes(b"\0\0" * 24000)
         elif name == "wake-detection":
-            assert path is not None
+            path = Path(command[2])
+            self.paths.append(path)
             self.wake_attempts += 1
             path.write_text(json.dumps({"detected": self.wake_attempts == 2}), encoding="utf-8")
         elif name == "speech-capture":
@@ -209,7 +215,7 @@ class TranscriptionTimingOutCommands(ControlledCommands):
 
 COMMANDS = {
     "wake_capture": ["wake-capture", "{audio}"],
-    "wake_detection": ["wake-detection", "{output}"],
+    "wake_detection": ["wake-detection", "{audio}", "{output}"],
     "speech_capture": ["speech-capture", "{audio}", "{silence_seconds}"],
     "transcription": ["transcription", "{output}"],
     "extraction": ["extraction", "{output}"],
@@ -221,6 +227,28 @@ COMMANDS = {
 
 
 class VoiceTests(unittest.TestCase):
+    def test_command_runtime_overlaps_consecutive_wake_chunks(self) -> None:
+        controlled_commands = ControlledCommands()
+        detected_frame_counts: list[int] = []
+
+        def run(command: list[str] | tuple[str, ...], timeout: float | None) -> None:
+            if command[0] == "wake-detection":
+                with wave.open(command[1], "rb") as audio:
+                    detected_frame_counts.append(audio.getnframes())
+            controlled_commands.run(command, timeout)
+
+        with tempfile.TemporaryDirectory() as memory_directory:
+            runtime = CommandVoiceRuntime(
+                COMMANDS,
+                Path(memory_directory),
+                run_command=run,
+            )
+
+            runtime.wait_for_wake_and_capture()
+            runtime.report_failure("test complete", float("inf"))
+
+        self.assertEqual(detected_frame_counts, [24000, 36000])
+
     def test_low_confidence_creates_no_report_and_gives_audible_feedback(self) -> None:
         runtime = LowConfidenceVoiceRuntime()
         usda_search = ControlledUsdaSearch([COMPLETE_RESULT])
